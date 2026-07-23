@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.1] — 2026-07-23
+
 ### Changed
 - Linux release binaries are now statically linked via musl (matching herdr itself), removing the
   glibc ≥ 2.39 requirement that prevented installation on Amazon Linux 2023, Debian 12,
