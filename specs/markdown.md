@@ -6,7 +6,7 @@ Last edited: 2026-07-25
 
 # Markdown rendering
 
-How Markdown renders in PR bodies and file previews.
+How reviewr's built-in and optional external Markdown renderers produce styled terminal lines for PR bodies and file previews.
 
 ## Overview
 

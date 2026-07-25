@@ -16,9 +16,9 @@ pub fn on_path(name: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
 }
 
-/// Wait for a child within one wall-clock budget, then kill and reap it. Renderer callers pass
-/// the remainder of their total deadline so stdout capture and process exit cannot each consume
-/// a full timeout (`specs/markdown.md`).
+/// Wait for a child within the renderer invocation's remaining wall-clock budget, then terminate
+/// its process group and reap it. The caller shares one deadline across stdin delivery, stdout
+/// capture, and process exit so no phase receives a fresh timeout (`specs/markdown.md`).
 pub(crate) fn wait_bounded(child: &mut Child, grace: Duration) -> Option<std::process::ExitStatus> {
     let deadline = std::time::Instant::now() + grace;
     let pid = RustixPid::from_child(child);
