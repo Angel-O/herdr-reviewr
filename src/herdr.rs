@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::Command;
 
+use crate::logln;
 use crate::turn::Status;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -26,10 +27,14 @@ struct AgentList {
 /// `herdr agent rename --clear` leaves `name` present and null. Both parse to `None`. The
 /// identity fields stay required, so a payload missing `pane_id` fails the parse loudly
 /// instead of minting an unaddressable send target.
+///
+/// `agent_status` is kept as herdr spelled it, not as the [`Status`] it parses to: the picker
+/// row shows the spelling and looks its label up by it, so a state herdr adds must survive a
+/// round trip reviewr does not understand (`specs/herdr-host.md`).
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 struct AgentPane {
     agent: Option<String>,
-    agent_status: Status,
+    agent_status: String,
     pane_id: String,
     tab_id: String,
     workspace_id: String,
@@ -89,12 +94,20 @@ fn agent_list() -> Result<Vec<AgentPane>> {
 }
 
 /// What `Send` does: one workspace agent sends directly, several open the picker, and no
-/// agent refuses (`specs/herdr-host.md`). A failed enumeration refuses the same way, so the
-/// reviewer is never told a count herdr did not report. The status line renders the refusal
-/// as `agent failed: <this message>` (HH-REFUSE-SAYS-CLIPBOARD).
+/// agent refuses (`specs/herdr-host.md`). A failed enumeration refuses too, but says so rather
+/// than reporting a count herdr never gave. Either refusal is the whole status line, so both
+/// stay one short sentence naming the clipboard (HH-REFUSE-SAYS-CLIPBOARD).
 pub fn send_target() -> Result<SendTarget> {
     let (_, ws, me) = agent_env();
-    let agents = agent_list().unwrap_or_default();
+    let agents = match agent_list() {
+        Ok(agents) => agents,
+        Err(e) => {
+            // The chain names the argv and herdr's stderr, which is diagnosis, not contract. A
+            // sidebar footer is 40 columns wide, so it goes to the log and not the status line.
+            logln!("agent list failed: {e:#}");
+            bail!("herdr did not answer — copy to the clipboard instead")
+        }
+    };
     // Candidacy is decided once, here: an `agent` field, our workspace, not our own pane
     // (HH-AGENT-PANES, HH-NOT-SELF). Rows keep `agent list` order, which is herdr's own
     // (`specs/herdr-host.md`).
@@ -133,15 +146,21 @@ impl AgentPane {
             .unwrap_or_else(|| self.pane_id.clone())
     }
 
-    /// The agent's `state_labels` entry for its state, else the state itself.
+    /// The agent's `state_labels` entry for its state, else the state itself. Both the lookup
+    /// key and the fallback are herdr's own spelling, so a state reviewr does not know still
+    /// names itself on the row instead of reading `unknown` (`specs/herdr-host.md`).
     fn row_state(&self) -> String {
-        let state = self.agent_status.as_str();
         self.state_labels
             .as_ref()
-            .and_then(|labels| labels.get(state))
+            .and_then(|labels| labels.get(&self.agent_status))
             .filter(|label| !label.is_empty())
             .cloned()
-            .unwrap_or_else(|| state.to_string())
+            .unwrap_or_else(|| self.agent_status.clone())
+    }
+
+    /// The lifecycle status turn tracking reads from this pane.
+    fn status(&self) -> Status {
+        Status::from_wire(&self.agent_status)
     }
 }
 
@@ -211,7 +230,7 @@ fn parse_agents(json: &str) -> Result<Vec<AgentPane>> {
 pub fn resolved_agent_status() -> Result<Option<Status>> {
     let (tab, ws, me) = agent_env();
     Ok(pick_agent(&agent_list()?, tab.as_deref(), ws.as_deref(), me.as_deref())
-        .map(|agent| agent.agent_status))
+        .map(AgentPane::status))
 }
 
 /// The sole agent in this tab, else the sole workspace agent, for turn tracking
@@ -278,7 +297,7 @@ mod tests {
     fn agent(pane: &str, tab: &str, ws: &str) -> AgentPane {
         AgentPane {
             agent: Some("claude".to_string()),
-            agent_status: Status::Working,
+            agent_status: "working".to_string(),
             pane_id: pane.to_string(),
             tab_id: tab.to_string(),
             workspace_id: ws.to_string(),
@@ -291,7 +310,7 @@ mod tests {
     fn non_agent_pane(pane: &str, tab: &str, ws: &str) -> AgentPane {
         AgentPane {
             agent: None,
-            agent_status: Status::Unknown,
+            agent_status: "unknown".to_string(),
             pane_id: pane.to_string(),
             tab_id: tab.to_string(),
             workspace_id: ws.to_string(),
@@ -491,6 +510,17 @@ mod tests {
         let wrapped = r#"{"result":{"agents":[{"agent":"claude","agent_status":"working","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8"}]}}"#;
         assert_eq!(parse_agents(wrapped).unwrap(), [agent("w8:p1", "w8:t1", "w8")]);
         assert!(parse_agents("[]").is_err());
-        assert_eq!(serde_json::from_str::<Status>(r#""starting""#).unwrap(), Status::Unknown);
+    }
+
+    #[test]
+    fn a_state_herdr_adds_names_itself_on_the_row_and_is_unknown_to_tracking() {
+        let bare = r#"{"result":{"agents":[{"agent":"claude","agent_status":"compacting","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8"}]}}"#;
+        let parsed = parse_agents(bare).unwrap();
+        assert_eq!(parsed[0].row_state(), "compacting", "the row shows herdr's own spelling");
+        assert_eq!(parsed[0].status(), Status::Unknown, "tracking folds it to unknown");
+        // And the spelling is the `state_labels` key, so herdr can label a state reviewr has
+        // never heard of (`specs/herdr-host.md`).
+        let labelled = r#"{"result":{"agents":[{"agent":"claude","agent_status":"compacting","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8","state_labels":{"compacting":"Compacting"}}]}}"#;
+        assert_eq!(parse_agents(labelled).unwrap()[0].row_state(), "Compacting");
     }
 }

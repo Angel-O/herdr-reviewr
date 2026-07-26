@@ -23,7 +23,7 @@ It bites in two layouts: a sidebar opened with `tab` placement, whose own tab ho
 - [x] A chosen pane that closed while the picker was open fails the send and keeps every comment.
 - [x] A refresh behind the picker adds, drops, or reorders no row, and moves no place state.
 - [x] A picker taller than the pane scrolls with the highlight. Only the first nine rows carry a number.
-- [x] A config error closes the picker. Recovery lands in `Normal` with every comment intact.
+- [x] A config error closes the picker and drops its frozen rows. Recovery lands on the view the picker opened over, with every comment intact.
 - [x] Turn tracking behaves identically: tab first, workspace second, unresolved samples nothing.
 
 ## Out of Scope
@@ -80,6 +80,7 @@ Invariants bound to named tests:
 
 ## Replan
 
+- 2026-07-26: review found the footer dropped any status too long for row 1, so DoD lines 1 and 6 were unobservable in a real sidebar. `added 1 comment to claude` needed 80 columns and the refusal needed 120. Fixed in the footer, where the status now outranks the cursor's actions and truncates, not by shortening the messages alone. `specs/input.md` gained the row-1 rank the code had invented for itself.
 - 2026-07-26: step 1 resolved. `herdr agent rename` does surface `name`, so the disambiguation workaround holds. herdr rejects names with spaces, so the mockup's `release bot` row was impossible and became `release-bot` in `specs/herdr-host.md`. `--clear` leaves `name` present and null, so parsing treats null as absent.
 - If `agent list` order does not group by tab, rows cannot honour "tab before tab" from the CLI alone. Record what the order is and revisit the spec line.
 - 2026-07-26: initial plan. Supersedes PR #36 by @shumkov, whose independent implementation is credited in the PR description.

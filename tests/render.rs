@@ -492,6 +492,55 @@ fn a_narrow_row_keeps_send_and_the_more_hint_by_shedding_the_primary_label() {
 }
 
 #[test]
+fn the_footer_shows_the_sends_outcome_at_a_sidebar_width_by_yielding_the_cursor_actions() {
+    let mut app = edited_app();
+    on_changed_line(&mut app);
+    app.start_comment();
+    app.input_push('n');
+    app.submit_comment(); // a written comment adds `s send 1` to row 1
+
+    // The status is the only answer `s` gives, and a reviewr sidebar is around 40 columns wide, so
+    // the cursor's actions yield to it: the `?` panel repeats every action and nothing repeats the
+    // status (`specs/input.md`, HH-REFUSE-SAYS-CLIPBOARD).
+    app.status = "no agent here — copy to the clipboard instead".to_string();
+    let narrow = footer_line(&render_at(&app, 40));
+    assert!(narrow.contains("no agent here"), "the refusal shows at 40 columns:\n{narrow}");
+    assert!(narrow.contains("s send 1"), "send never drops:\n{narrow}");
+    assert!(narrow.trim_end().ends_with('?'), "the `?` never drops:\n{narrow}");
+    assert!(!narrow.contains("d delete"), "the cursor's actions yield to the status:\n{narrow}");
+
+    // With room for both, nothing yields.
+    let wide = footer_line(&render_at(&app, 120));
+    assert!(
+        wide.contains("no agent here — copy to the clipboard instead"),
+        "a wide row shows the whole refusal:\n{wide}"
+    );
+    assert!(wide.contains("d delete"), "and keeps the cursor's actions:\n{wide}");
+
+    // Below a legible width the status drops rather than paint a lone `·` promising a message.
+    let tiny = footer_line(&render_at(&app, 20));
+    assert!(!tiny.contains("agent"), "no room for a legible message, so none is painted:\n{tiny}");
+    assert!(tiny.contains("s send 1"), "send still never drops:\n{tiny}");
+
+    // A truncated status never pushes the `?` off the right edge, at any width that fits row 1's
+    // own fixed parts. Below 14 columns the shed primary and `send` overflow it on their own, with
+    // no status in play at all.
+    for w in 14..=140u16 {
+        let row = footer_line(&render_at(&app, w));
+        assert!(row.trim_end().ends_with('?'), "the `?` left the row at width {w}:\n{row}");
+    }
+
+    // `s` is also the comments list's primary, so a refusal has to reach the reviewer there too.
+    // The list has no `?`, so its trailing `…` is the only promise the trimmed actions exist, and
+    // the status leaves room for it (`specs/input.md`).
+    app.open_list();
+    let listed = footer_line(&render_at(&app, 40));
+    assert!(listed.contains("no agent here"), "the refusal shows in the list at 40:\n{listed}");
+    assert!(listed.contains("s send 1"), "send never drops in the list either:\n{listed}");
+    assert!(listed.trim_end().ends_with('…'), "the trimmed actions keep their `…`:\n{listed}");
+}
+
+#[test]
 fn the_expansion_aligns_row_one_into_the_labeled_grid() {
     let mut app = edited_app();
     on_changed_line(&mut app);

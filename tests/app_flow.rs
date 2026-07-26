@@ -7,7 +7,7 @@ use std::cell::RefCell;
 
 use anyhow::{Result, bail};
 use common::{Repo, app_on, enter_tab, typed};
-use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode, armed_row};
+use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode};
 use herdr_reviewr::config::NavigatorPosition;
 use herdr_reviewr::export::ExportTarget;
 use herdr_reviewr::herdr::AgentChoice;
@@ -41,9 +41,6 @@ impl FakeTarget {
 impl ExportTarget for FakeTarget {
     fn label(&self) -> &'static str {
         "fake"
-    }
-    fn pane(&self) -> Option<&str> {
-        Some("w8:p2")
     }
     fn success_message(&self, count: usize) -> String {
         let noun = if count == 1 { "comment" } else { "comments" };
@@ -4499,33 +4496,46 @@ fn app_with_picker(r: &Repo) -> App {
 
 #[test]
 fn the_highlight_arms_the_last_sent_agent_then_the_one_beside_then_row_one() {
-    let rows = three_agents();
+    let r = edited_repo();
+    // Driven through `open_picker`, the verb the send actually calls, so the arming order and
+    // its wiring are proven together (`specs/herdr-host.md`).
+    let armed = |last_sent: Option<&str>, beside: Option<&str>| {
+        let mut app = app_on(&r);
+        app.last_sent_pane = last_sent.map(str::to_string);
+        app.open_picker(three_agents(), beside);
+        app.picker_cursor
+    };
     // Level 1 wins whenever it is still a candidate.
-    assert_eq!(armed_row(&rows, Some("w8:p3"), Some("w8:p2")), 2);
+    assert_eq!(armed(Some("w8:p3"), Some("w8:p2")), 2);
     // A last-sent pane that has since closed falls through to the pane opened beside.
-    assert_eq!(armed_row(&rows, Some("w8:pZ"), Some("w8:p2")), 1);
+    assert_eq!(armed(Some("w8:pZ"), Some("w8:p2")), 1);
     // Both absent or both closed land on the first row.
-    assert_eq!(armed_row(&rows, None, None), 0);
-    assert_eq!(armed_row(&rows, Some("w8:pZ"), Some("w8:pY")), 0);
+    assert_eq!(armed(None, None), 0);
+    assert_eq!(armed(Some("w8:pZ"), Some("w8:pY")), 0);
     // An own-tab sidebar has no pane it was opened beside, so it arms row 1 until its first send.
-    assert_eq!(armed_row(&rows, None, Some("w8:pY")), 0);
+    assert_eq!(armed(None, Some("w8:pY")), 0);
 }
 
 #[test]
 fn the_picker_moves_by_key_and_a_digit_past_the_last_row_is_inert() {
     let r = edited_repo();
     let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
     assert_eq!(app.picker_cursor, 0);
 
-    app.picker_move(1);
-    assert_eq!(app.picker_cursor, 1);
-    app.picker_move(-1);
-    assert_eq!(app.picker_cursor, 0);
+    // Through `handle_key`, so the picker's movement bindings are proven live, not just the verb.
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('j')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "`j` moves the highlight down");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('k')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 0, "`k` moves it back up");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Down), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "the arrows move it too");
 
     app.picker_goto(2);
     assert_eq!(app.picker_cursor, 2);
     // A mistyped digit must not arm a neighbour the reviewer would then send to.
-    app.picker_goto(7);
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('7')), area, &keymap).unwrap();
     assert_eq!(app.picker_cursor, 2, "a row past the end is inert, not clamped");
 }
 
@@ -4541,19 +4551,8 @@ fn cancelling_the_picker_keeps_every_comment() {
     assert!(app.picker_rows.is_empty(), "the frozen rows are dropped with the picker");
 }
 
-#[test]
-fn only_a_successful_send_arms_the_next_pickers_highlight() {
-    let r = edited_repo();
-    let mut app = app_with_picker(&r);
-
-    app.export(&FakeTarget::failing());
-    assert_eq!(app.store.len(), 2, "a failed send keeps every comment");
-    assert_eq!(app.last_sent_pane, None, "a failed send arms nothing");
-
-    app.export(&FakeTarget::ok());
-    assert!(app.store.is_empty(), "a successful send consumes the whole set");
-    assert_eq!(app.last_sent_pane.as_deref(), Some("w8:p2"), "the pane comes from the target");
-}
+// `last used` arming is proven end to end in tests/send_flow.rs, against a real send through a
+// fake herdr — the only layer where the pane that was addressed and the pane that arms can differ.
 
 #[test]
 fn a_picker_opened_from_the_comments_list_closes_back_onto_it() {
@@ -4590,10 +4589,16 @@ fn the_picker_swallows_every_key_it_does_not_bind() {
     // the picker is up, and both are live in the comments list (specs/input.md).
     for code in [KeyCode::Char('q'), KeyCode::Char('y'), KeyCode::Char('r'), KeyCode::Char('s')] {
         let mut app = app_with_picker(&r);
+        let rows_before = app.picker_rows.clone();
+        let status_before = app.status.clone();
         handle_key(&mut app, KeyEvent::from(code), area, &keymap).unwrap();
         assert!(!app.should_quit, "{code:?} quit the app from the picker");
         assert_eq!(app.mode, Mode::Picker, "{code:?} left the picker");
         assert_eq!(app.store.len(), 2, "{code:?} consumed comments from the picker");
+        // `y` reaching the clipboard and `s` re-entering the send both change these even where
+        // the action itself fails, so they catch the leak on a machine with no clipboard tool.
+        assert_eq!(app.picker_rows, rows_before, "{code:?} rebuilt the frozen rows");
+        assert_eq!(app.status, status_before, "{code:?} acted and reported from the picker");
     }
 }
 
@@ -4618,8 +4623,11 @@ fn a_refresh_behind_the_picker_moves_neither_the_rows_nor_the_place() {
     let rows_before = app.picker_rows.clone();
     let file_before = app.diff_path.clone();
     let cursor_before = app.diff_cursor;
+    let frozen_diff = app.diff.clone();
 
-    // A second file appears and the worktree changes underneath the open picker.
+    // The open file shifts underneath the picker, and a second file appears. Rewriting `a.rs`
+    // is what makes this test detect the freeze: a new file alone never rebuilds the open diff.
+    r.write("a.rs", "alpha\nBETA\ngamma\ndelta\nepsilon\nzeta\n");
     r.write("b.rs", "new\n");
     app.reload().unwrap();
 
@@ -4627,6 +4635,8 @@ fn a_refresh_behind_the_picker_moves_neither_the_rows_nor_the_place() {
     assert_eq!(app.picker_cursor, 2, "the highlight stays where the reviewer put it");
     assert_eq!(app.diff_path, file_before, "the place behind the picker is frozen");
     assert_eq!(app.diff_cursor, cursor_before);
+    assert_eq!(app.diff, frozen_diff, "the open diff is frozen while the picker is up");
+    assert!(app.entries.iter().any(|f| f.path == "b.rs"), "the file list still refreshes");
 }
 
 #[test]
@@ -4635,9 +4645,29 @@ fn a_config_error_closes_the_picker_and_keeps_the_comments() {
     let mut app = app_with_picker(&r);
 
     app.set_config_error("theme = \"not-a-theme\"".to_string());
-    assert_ne!(app.mode, Mode::Picker, "the picker's rows would be stale after recovery");
+    assert_eq!(app.mode, Mode::Normal, "the picker's rows would be stale after recovery");
     assert!(app.picker_rows.is_empty());
     assert_eq!(app.store.len(), 2, "saved comments always survive a config error");
+
+    // A picker opened over the find band unwinds through that band's own closer, so recovery
+    // never meets a restored mode whose state has already been dropped.
+    let mut over_find = app_on(&r);
+    comment_on(&mut over_find, '+', "one");
+    over_find.open_find();
+    over_find.open_picker(three_agents(), None);
+    over_find.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_eq!(over_find.mode, Mode::Normal, "the find band closes with the picker it held");
+
+    // A picker opened over the comments list leaves the list behind, which recovery carries with
+    // the comments, so the reviewer lands where they were rather than in `Normal`.
+    let mut over_list = app_on(&r);
+    comment_on(&mut over_list, '+', "one");
+    over_list.open_list();
+    over_list.open_picker(three_agents(), None);
+    over_list.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_eq!(over_list.mode, Mode::List, "the list outlives the picker it held");
+    assert!(over_list.picker_rows.is_empty(), "the frozen rows would be stale after recovery");
+    assert_eq!(over_list.store.len(), 1, "saved comments always survive a config error");
 }
 
 #[test]

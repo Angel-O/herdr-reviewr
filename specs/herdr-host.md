@@ -170,12 +170,14 @@ The highlight opens on the first of these that is still a candidate:
 Only a successful send sets the first level. The last-sent row carries a dim `last used` tag,
 so the remembered default reads before `enter` fires it.
 
-- Rows follow herdr's own order for the workspace, tab before tab and pane before pane inside a tab.
+- Rows keep herdr's own order for the workspace. reviewr sorts nothing.
 - Only the first nine rows carry a number.
 - The row set and its order freeze when the picker opens. A refresh behind it never adds, drops, or reorders a row.
 - The picker is a mid-gesture hold, so a refresh behind it never moves the reviewer's place (`overview.md`).
 
 The send addresses the pane on the chosen row. A pane that closed while the picker was open fails the send, and every comment stays. A successful send focuses the chosen agent and names it.
+
+A configuration error closes the picker and drops its frozen rows, which would be stale by the time recovery lands. Every comment survives, and so does the last-sent agent that arms the next picker (`config.md`).
 
 ## Clipboard
 

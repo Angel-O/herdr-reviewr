@@ -20,6 +20,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - One agent still sends straight through, with no picker. Turn tracking is unchanged.
 
+### Fixed
+- **The status survives a narrow sidebar.** A message longer than the room left on the footer's
+  first row used to vanish outright, so a 40-column pane answered `s` with nothing at all. It named
+  neither the agent it reached nor the reason it refused. The status now truncates to fit, and the
+  cursor's actions step aside for it, since `?` already lists them.
+- **A picker row names any state herdr reports.** An agent status reviewr had never heard of read
+  `unknown` on the row. The row now shows herdr's own spelling for it, and herdr's own label.
+
 ## [0.24.1] — 2026-07-23
 
 ### Changed

@@ -1448,7 +1448,9 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         A::Cancel | A::ClosePicker => ("esc".into(), "cancel"),
         A::CloseList | A::CloseSearch | A::CloseFind => ("esc".into(), "close"),
         A::PickAgent => ("enter".into(), "send"),
-        A::MovePickerRow => ("1-9 ↑↓".into(), "move"),
+        // The digits are literal, so they are spelled; the two movement keys are bound, so they
+        // read off the keymap like every other hint (`specs/input.md`).
+        A::MovePickerRow => (format!("1-9 {} {}", hint(K::Down), hint(K::Up)), "move"),
         A::Search => (hint(K::Search), "search"),
         A::Find => (hint(K::Find), "find"),
         A::Wrap => (hint(K::Wrap), "wrap"),
@@ -1514,6 +1516,15 @@ fn entry_width(app: &App, action: FooterAction) -> usize {
 const SEP: &str = " · ";
 const BAND_INDENT: usize = 6;
 
+/// The footer status's frame: the two-space gap, the `·`, and the trailing space around it.
+const STATUS_FRAME: usize = 5;
+/// The narrowest status row 1 paints. Below it a lone `·` would promise a message the row has no
+/// room to show, so the status drops instead (`specs/input.md`).
+const STATUS_MIN: usize = 8;
+/// The ` …` a modal footer ends with when an action was trimmed off row 1. It stands in for the
+/// `?` a modal does not have, so it is the only promise that more keys exist.
+const MORE_ELLIPSIS: usize = 2;
+
 /// The footer: row 1 (the primary, the cursor's actions, `send`, and a `?`), plus the wrapped
 /// `?`-expansion bands below when it is open. Row 1 trims trailing actions to fit; the primary,
 /// `send`, and `?` never drop, and the bands are capped so the body keeps its rows (`specs/input.md`).
@@ -1570,6 +1581,12 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
     // both yield to keep them on the line — the primary reserves their width before anything else.
     let send_w = send.map_or(0, |a| entry_width(app, a));
     let tail = send_w + reserve;
+
+    // The status answers the keypress the reviewer just made and fades on its own clock, so it
+    // outranks the cursor's actions: the `?` panel repeats every action, and nothing repeats the
+    // status (`specs/input.md`). It reserves its room here, before the actions pack into what is
+    // left, so a 40-column sidebar still shows the send's outcome (HH-REFUSE-SAYS-CLIPBOARD).
+    let status_w = if app.status.is_empty() { 0 } else { STATUS_FRAME + app.status.width() };
 
     // While the panel is open, row 1 joins the labeled grid: a dim `do` gutter, its content aligned
     // under the `go`/`move` keys. Collapsed (and in a modal) it stays flush — the plain action bar.
@@ -1630,7 +1647,7 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
     let mut trimming = false;
     for a in do_acts {
         let ew = entry_width(app, a);
-        if trimming || used + ew + send_w + reserve > w {
+        if trimming || used + ew + send_w + status_w + reserve > w {
             trimming = true;
             overflow.push(a);
             continue;
@@ -1647,12 +1664,15 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
         spans.extend(action_entry(app, a, Band::Send));
     }
 
-    // The transient status rides after the actions and fades without covering them; dropped when it
-    // would reach the `?`.
+    // The transient status rides after the actions, truncated into the room its reservation kept.
+    // It drops only below `STATUS_MIN`, where no message would be legible anyway. A modal that
+    // trimmed an action keeps room for its `…` too, since nothing else there says more keys exist.
     if !app.status.is_empty() {
-        let text = format!("  · {} ", app.status);
-        if used + text.chars().count() + reserve <= w {
-            used += text.chars().count();
+        let more = if overflow.is_empty() { reserve } else { reserve.max(MORE_ELLIPSIS) };
+        let room = w.saturating_sub(used + STATUS_FRAME + more);
+        if room >= STATUS_MIN {
+            let text = format!("  · {} ", truncate_width(&app.status, room));
+            used += text.width();
             spans.push(Span::styled(text, Style::default().fg(p.peach)));
         }
     }

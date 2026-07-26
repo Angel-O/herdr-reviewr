@@ -6,18 +6,14 @@
 //! worktree snapshot; it promotes the candidate to the live baseline once the turn has
 //! changed a file, so a question-only turn keeps the previous turn's diff.
 
-use serde::Deserialize;
-
 /// The agent status reported by `herdr agent list` (`agent_status`).
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Status {
     Idle,
     Working,
     Blocked,
     Done,
     #[default]
-    #[serde(other)]
     Unknown,
 }
 
@@ -29,15 +25,17 @@ impl Status {
         matches!(self, Status::Idle | Status::Done)
     }
 
-    /// The wire spelling herdr uses, which is both the picker's fallback label and the key
-    /// its `state_labels` map is looked up by (`specs/herdr-host.md`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Status::Idle => "idle",
-            Status::Working => "working",
-            Status::Blocked => "blocked",
-            Status::Done => "done",
-            Status::Unknown => "unknown",
+    /// The status one `agent_status` string means — the only place a wire spelling becomes a
+    /// status. A spelling reviewr does not know is `Unknown`, which is mid-turn rather than
+    /// resting, so a state herdr adds can never fabricate a turn edge. The row shows herdr's
+    /// own spelling rather than one of these names, so nothing maps back (`src/herdr.rs`).
+    pub fn from_wire(wire: &str) -> Self {
+        match wire {
+            "idle" => Status::Idle,
+            "working" => Status::Working,
+            "blocked" => Status::Blocked,
+            "done" => Status::Done,
+            _ => Status::Unknown,
         }
     }
 }
@@ -112,14 +110,18 @@ mod tests {
     use super::{Status, TurnTracker};
 
     #[test]
-    fn as_str_matches_the_serde_wire_spelling_for_every_variant() {
-        // `as_str` is the `state_labels` lookup key and the picker's fallback label, so it
-        // must never drift from the spelling serde parses (`specs/herdr-host.md`).
-        for status in [Status::Idle, Status::Working, Status::Blocked, Status::Done] {
-            let wire = format!("\"{}\"", status.as_str());
-            assert_eq!(serde_json::from_str::<Status>(&wire).unwrap(), status);
-        }
-        assert_eq!(Status::Unknown.as_str(), "unknown");
+    fn from_wire_reads_herdrs_four_spellings_and_folds_the_rest_to_unknown() {
+        // The spellings are herdr's, so they are pinned literally rather than derived from
+        // anything reviewr owns (`specs/herdr-host.md`).
+        assert_eq!(Status::from_wire("idle"), Status::Idle);
+        assert_eq!(Status::from_wire("working"), Status::Working);
+        assert_eq!(Status::from_wire("blocked"), Status::Blocked);
+        assert_eq!(Status::from_wire("done"), Status::Done);
+        assert_eq!(Status::from_wire("unknown"), Status::Unknown);
+        // A state herdr adds is unknown to tracking, and unknown is never resting, so the next
+        // `working` sample resumes the turn in flight instead of starting a new one.
+        assert_eq!(Status::from_wire("compacting"), Status::Unknown);
+        assert!(!Status::from_wire("compacting").is_resting());
     }
 
     #[test]

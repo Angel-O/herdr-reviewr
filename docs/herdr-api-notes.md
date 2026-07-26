@@ -72,7 +72,9 @@ command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — plugin_id 
 ## Resolve the agent / send comments
 
 `herdr agent list` → `{"result":{"agents":[ {pane_id, tab_id, workspace_id, agent_status, ...} ]}}`.
-It takes no flags, so the workspace filter and the row order are the caller's to apply.
+It takes no flags, so the workspace filter is the caller's to apply. The row order is herdr's:
+observed on 0.7.5 across 13 live agents, entries arrive grouped by workspace and by tab within a
+workspace. No sample held two agents in one tab, so the order inside a tab is unverified.
 
 - Send candidates = every agent in the sidebar's `HERDR_WORKSPACE_ID`. One sends directly,
   several open the picker (`../specs/herdr-host.md`). Turn tracking still resolves `HERDR_TAB_ID`

@@ -1467,7 +1467,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             (Some(K::Down), _) => app.list_move(1),
             (Some(K::Up), _) => app.list_move(-1),
             (Some(K::Send), _) => app.send_to_agent(),
-            (Some(K::Copy), _) => app.export(&Clipboard),
+            (Some(K::Copy), _) => {
+                app.export(&Clipboard);
+            }
             (Some(K::Edit), _) => app.start_edit(),
             (Some(K::Delete), _) => app.delete_comment(),
             _ => {}
@@ -1507,7 +1509,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::Edit if app.focus == Focus::Diff => app.start_edit(),
             K::Delete if app.focus == Focus::Diff => app.delete_comment(),
             K::Send => app.send_to_agent(),
-            K::Copy => app.export(&Clipboard),
+            K::Copy => {
+                app.export(&Clipboard);
+            }
             K::NextComment => app.jump_comment(1),
             K::PrevComment => app.jump_comment(-1),
             K::Comments => app.open_list(),
@@ -1612,9 +1616,9 @@ pub fn handle_mouse(
     // opened it still owns its remaining drag and mouse-up events.
     if app.composing() || app.mode == Mode::List || app.mode == Mode::Picker {
         match m.kind {
-            // A first click moves the highlight; a click on the already-highlighted row
-            // sends. Two gestures to fire, so no single mis-click sends the review. Every
-            // other gesture is inert, and none reaches the view behind (`specs/input.md`).
+            // A click moves the highlight; a click on the already-highlighted row sends. The
+            // highlight is armed when the picker opens, so a first click on the armed row
+            // sends straight away (`specs/input.md`). Every other gesture is inert.
             MouseEventKind::Down(MouseButton::Left) if app.mode == Mode::Picker => {
                 match ui::hit_picker_row(area, app, m.column, m.row) {
                     Some(i) if i == app.picker_cursor => app.picker_pick(),

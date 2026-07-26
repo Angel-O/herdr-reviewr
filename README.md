@@ -408,8 +408,8 @@ The known constraints:
   says so, and **Send** still works.
 
 **herdr coupling**
-- **Send needs a findable agent pane** — the agent in your tab, or the sole agent in the
-  workspace. Otherwise Send does nothing and keeps your comments.
+- **Send needs an agent in the workspace** — one agent takes the comments straight away, and
+  several open a picker so you choose. With no agent, Send says so and keeps your comments.
 - **last turn relies on polling** (2 s default) — a turn that starts and finishes inside one
   poll is missed, and the scope shows everything since the last *observed* turn start. It never
   shows lines the agent didn't write, and it can span more than one turn.

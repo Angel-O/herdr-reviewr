@@ -39,12 +39,6 @@ pub fn format_all(comments: &[&Comment]) -> String {
 pub trait ExportTarget {
     fn export(&self, text: &str) -> Result<()>;
     fn label(&self) -> &'static str;
-    /// The herdr pane a successful export delivered to, `None` for targets without one
-    /// (the clipboard). The pane and the delivery are one value, so the picker's `last used`
-    /// arming can never name a pane the export did not address (`specs/herdr-host.md`).
-    fn pane(&self) -> Option<&str> {
-        None
-    }
     /// Destination-specific confirmation shown after a successful export.
     fn success_message(&self, count: usize) -> String;
 }
@@ -122,10 +116,6 @@ pub struct Agent {
 impl ExportTarget for Agent {
     fn label(&self) -> &'static str {
         "agent"
-    }
-
-    fn pane(&self) -> Option<&str> {
-        Some(&self.pane)
     }
 
     /// Names the agent it addressed. The send is irreversible and consumes the whole set, so

@@ -91,7 +91,7 @@ The steps and the skips share the rest:
 - Adjacency is the list's visible order, so a collapsed subtree is skipped.
 - Opening a file this way moves the list selection onto it.
 - With no target in the pressed direction, a press does nothing.
-- Both are inert while a line selection is live and while the comments list is open.
+- Both are inert while a line selection is live and while the comments list or the agent picker is open.
 - The `PR` tab has neither.
 
 ### Footer
@@ -126,11 +126,14 @@ Row 1 is always shown:
 | ------- | --------------------------------------------------------------------------------- |
 | primary | the most likely next step, in a bright accent, never dropped                      |
 | send    | `s send N`, present once any comment is written, after the primary, never dropped |
+| status  | the transient message, after `send`, truncated to fit                             |
 | actions | the cursor's other actions, in normal text, trimmed to fit                        |
 | more    | a `?` at the right, muted but legible — always present, and expands the rest      |
 
-A narrow row drops trailing actions to fit. The primary, `send`, and the `?` never drop. On a pane
-too narrow even for those, the primary truncates before the `?` does.
+A narrow row drops trailing actions to fit. The status outranks them, since the `?` panel repeats
+every action and nothing repeats the status. A 40-column sidebar shows `no agent here …` rather than
+nothing. The status drops only below a legible width. The primary, `send`, and the `?` never drop. On
+a pane too narrow even for those, the primary truncates before the `?` does.
 
 The `?` expansion:
 
@@ -218,6 +221,7 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - A click moves the highlight to the clicked row. A click on the highlighted row sends. The highlight is armed when the picker opens, so a first click on the armed row sends immediately. Every other gesture is inert, and none reaches the view behind.
 - The digits are literal here, whatever `tab-changes` and its siblings are bound to.
 - A picker taller than the pane scrolls with the highlight.
+- `esc` returns to the view the send was issued from, the comments list and the find band included.
 
 ## Non-goals
 

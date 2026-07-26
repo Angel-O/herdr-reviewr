@@ -52,7 +52,7 @@ results.
 
 - `/` opens the search screen from any tab, from either pane. `esc` returns to the tab
   and place it left.
-- In the comment editor `/` is text. In the comments list it is inert.
+- In the comment editor `/` is text. In the comments list and the agent picker it is inert.
 - The header stays. The input band sits under it: the query with its caret, then the mode
   chips `files │ code`, the active one lit like the active header tab, the inactive one
   quiet. An empty query shows a dim placeholder. The footer carries the `tab` flip key, so

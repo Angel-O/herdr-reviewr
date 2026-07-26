@@ -719,9 +719,11 @@ impl App {
         // takes over; recovery restores the tab beneath them. The query is not restored, and
         // neither are the picker's frozen rows, which would be stale by then (specs/search.md,
         // specs/find-in-file.md, specs/herdr-host.md).
+        // The picker closes first, onto the mode it opened over, so the two closers below then
+        // tear down that mode's own state instead of leaving it restored but emptied.
+        self.close_picker();
         self.close_search();
         self.close_find();
-        self.close_picker();
         self.config = PluginConfigState::Blocked { error };
         self.pr_pending = None;
     }
@@ -3301,18 +3303,17 @@ impl App {
 
 /// The row the picker's highlight opens on: the agent this session sent to last, else the
 /// pane the sidebar was opened beside, else the first row. Each level is skipped unless it is
-/// still a candidate, so a closed pane falls through (`specs/herdr-host.md`). Pure, so the
-/// arming is tested without the environment the real levels come from.
-#[must_use]
-pub fn armed_row(rows: &[AgentChoice], last_sent: Option<&str>, beside: Option<&str>) -> usize {
+/// still a candidate, so a closed pane falls through (`specs/herdr-host.md`).
+fn armed_row(rows: &[AgentChoice], last_sent: Option<&str>, beside: Option<&str>) -> usize {
     let row_of = |pane: &str| rows.iter().position(|row| row.pane_id == pane);
     last_sent.and_then(row_of).or_else(|| beside.and_then(row_of)).unwrap_or(0)
 }
 
 impl App {
     /// `Send`: one agent goes straight out, several open the picker, none refuses and names
-    /// the clipboard (`specs/herdr-host.md`). The empty-store guard in [`Self::export`] keeps
-    /// precedence, so `Send` with nothing written opens no picker.
+    /// the clipboard (`specs/herdr-host.md`). The empty-store refusal is repeated here, ahead
+    /// of [`Self::export`]'s own, so `Send` with nothing written shells out to no herdr call
+    /// and opens no picker.
     pub fn send_to_agent(&mut self) {
         if self.store.is_empty() {
             self.status = "no comments to send".to_string();
@@ -3321,7 +3322,9 @@ impl App {
         match herdr::send_target() {
             Ok(SendTarget::One(agent)) => self.export_to_agent(&agent),
             Ok(SendTarget::Many(rows)) => self.open_picker(rows, herdr::opened_beside().as_deref()),
-            Err(e) => self.status = format!("agent failed: {e}"),
+            // The refusal is already a whole sentence naming the cause and the clipboard, so a
+            // prefix would only spend the width the footer needs to show it (HH-REFUSE-SAYS-CLIPBOARD).
+            Err(e) => self.status = e.to_string(),
         }
     }
 
@@ -3341,8 +3344,6 @@ impl App {
     pub fn close_picker(&mut self) {
         if self.mode == Mode::Picker {
             self.mode = std::mem::replace(&mut self.picker_over, Mode::Normal);
-        } else {
-            self.picker_over = Mode::Normal;
         }
         self.picker_rows.clear();
         self.picker_cursor = 0;
@@ -3372,44 +3373,46 @@ impl App {
     }
 
     /// Export to one decided pane. Nothing re-resolves it, so a pane that closed while the
-    /// picker was open fails here and keeps every comment (`specs/herdr-host.md`).
+    /// picker was open fails here and keeps every comment (`specs/herdr-host.md`). Only a
+    /// delivery arms the next picker's highlight, and the pane comes from the row this send
+    /// addressed, so `last used` can never name a pane the export did not reach.
     fn export_to_agent(&mut self, agent: &AgentChoice) {
         let target = Agent { pane: agent.pane_id.clone(), name: agent.name.clone() };
-        self.export(&target);
+        if self.export(&target) {
+            self.last_sent_pane = Some(agent.pane_id.clone());
+        }
     }
 
     /// Send/copy every written comment to `target`; consume the whole set only on
     /// success. A failed export leaves all comments in place (`specs/review-model.md`).
-    pub fn export(&mut self, target: &dyn ExportTarget) {
+    /// Reports whether the comments were delivered.
+    pub fn export(&mut self, target: &dyn ExportTarget) -> bool {
         if self.store.is_empty() {
             self.status = "no comments to send".to_string();
-            return;
+            return false;
         }
         let refs: Vec<&Comment> = self.store.iter().collect();
         let text = format_all(&refs);
         let n = refs.len();
         logln!("export ({n}) -> {} ::\n{text}", target.label());
-        match target.export(&text) {
+        let delivered = match target.export(&text) {
             Ok(()) => {
                 self.store.take_all();
                 self.status = target.success_message(n);
-                // Only a successful send arms the next picker's highlight, and the pane
-                // comes from the target itself, so `last used` can never name a pane the
-                // export did not address (`specs/herdr-host.md`).
-                if let Some(pane) = target.pane() {
-                    self.last_sent_pane = Some(pane.to_string());
-                }
                 logln!("export OK");
+                true
             }
             Err(e) => {
                 self.status = format!("{} failed: {e}", target.label());
                 logln!("export ERR: {e}");
+                false
             }
-        }
+        };
         self.clamp_list_cursor();
         if self.store.is_empty() {
             self.close_list();
         }
+        delivered
     }
 
     /// The number of files changed in the active scope — the header count, the same on both
@@ -3644,10 +3647,13 @@ mod tests {
         // not move the next picker's default (`specs/herdr-host.md`).
         let mut old = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
         old.last_sent_pane = Some("w8:p2".to_string());
+        old.mode = Mode::Picker;
 
         let mut recovered = App::new(PathBuf::from("."), Scope::Uncommitted, None);
         recovered.carry_authored_state_from(&mut old);
         assert_eq!(recovered.last_sent_pane.as_deref(), Some("w8:p2"));
+        // A picker that was open when the config broke does not come back with it.
+        assert_eq!(recovered.mode, Mode::Normal);
     }
 
     #[test]
