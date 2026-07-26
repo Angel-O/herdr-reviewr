@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-26
+
 ### Added
 - **Send picks the agent when there are several.** `Send` used to refuse in a workspace with more
   than one agent, leaving the clipboard as the only route, which reaches nothing when you review
