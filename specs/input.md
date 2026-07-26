@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-07-21
+Last edited: 2026-07-26
 ---
 
 # Input
@@ -19,6 +19,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 - The arrows, `tab`, `esc`, `enter`, and the page keys are structural. They are fixed and never rebind.
 - A key hint in the header or the footer shows its action's first bound key.
 - The comments list acts through the same bindings and closes on `esc` and the `comments` binding.
+- The agent picker acts through the `down` / `up` bindings and closes on `esc`.
 - Prose and mockups elsewhere show the default keys.
 
 | action                                                   | does                                        | keys                                        | mouse                         |
@@ -59,11 +60,11 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 
 `navigator-grow` and `navigator-shrink` change the active share by four percentage points. The allowed range clamps every change.
 
-These three navigator actions work from either main pane on every tab. While the comment editor is open, their printable characters are text. In the comments list they are inert. Those local modes omit the navigator actions from the footer.
+These three navigator actions work from either main pane on every tab. While the comment editor is open, their printable characters are text. In the comments list and the agent picker they are inert. Those local modes omit the navigator actions from the footer.
 
 A divider drag belongs to the navigator position and split axis at mouse-down. A keypress, terminal resize, or config-driven layout change cancels it. After cancellation, drag events are consumed until mouse-up rather than becoming a selection in the read pane.
 
-Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send reports that the comments were added to the agent input; a successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
+Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
 
 ## Behavior
 
@@ -169,8 +170,8 @@ Row 1's primary and actions follow the cursor:
 - An armed crossing outranks the cursor's own action and leads row 1, since only the footer says the next press leaves the file. It is the one movement key on row 1 (see Changeset traversal). While it is armed, the `move` band drops the hunk step, whose key row 1 now shows.
 - `scope`, `search`, and `find` are global, not cursor actions, so the `go` band carries them, never row 1 — `search` in every context, `find` wherever the read pane has content (`search.md`, `find-in-file.md`). `scope` leads row 1 only where nothing else does, an empty or notice diff.
 - Movement keys never sit on row 1. The `move` band shows them.
-- The comment editor, the comments list, the search screen, and the find band show their own one-row footer, without `?`. The expansion's open state is kept and restored when they close.
-- `?` (the `keys` action) toggles the expansion in `Normal` mode only. It is text in the comment editor and the search and find inputs, and inert in the comments list.
+- The comment editor, the comments list, the agent picker, the search screen, and the find band show their own one-row footer, without `?`. The expansion's open state is kept and restored when they close.
+- `?` (the `keys` action) toggles the expansion in `Normal` mode only. It is text in the comment editor and the search and find inputs, and inert in the comments list and the agent picker.
 - The changed-file count and line totals live in the header. The footer carries only the comment count, inside `s send N`.
 - On `PR` row 1 carries the PR state line and `o open ↗` per `pr-tab.md`, and `?` expands to the rest.
 
@@ -202,6 +203,21 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - Movement, insertion, and deletion are character-wise. Multi-byte and wide characters count as whole characters.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
+
+### Agent picker
+
+`Send` opens the picker (`herdr-host.md`). Every key below acts, and every other key is inert.
+
+| key                     | does                                        |
+| ----------------------- | ------------------------------------------- |
+| `j` / `k` / `↓` / `↑`   | move the highlight                          |
+| `1` – `9`               | move the highlight to that row              |
+| `enter`                 | send every comment to the highlighted agent |
+| `esc`                   | cancel, keeping every comment               |
+
+- A click moves the highlight to the clicked row. A click on the highlighted row sends. The highlight is armed when the picker opens, so a first click on the armed row sends immediately. Every other gesture is inert, and none reaches the view behind.
+- The digits are literal here, whatever `tab-changes` and its siblings are bound to.
+- A picker taller than the pane scrolls with the highlight.
 
 ## Non-goals
 

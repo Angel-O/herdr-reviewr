@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-21
+Last edited: 2026-07-26
 ---
 
 # TUI
@@ -30,6 +30,7 @@ The terminal frame: the two-pane layout, the tabs, and how the view stays curren
 - The read pane shows the selected file's diff or content (`diff-view.md`). The navigator pane shows the active tab's choices.
 - The comment input opens inline, directly under the last line of the selection (`input.md`). It pushes the diff below it down and grows as you type. It is never a footer band.
 - The footer is a live action bar (`input.md`).
+- The comments list and the agent picker open as popups over the body (`input.md`, `herdr-host.md`). While one is open, every painted color in the header and the body recedes halfway to the theme base. The footer stays bright, since it carries the popup's own keys.
 - The active tab sets both panes: diff and changed files in `Changes`, content and repo tree in `All files`, checks and comments in `PR` (`pr-tab.md`).
 - The review loop is the same in `Changes` and `All files`. `PR` is a read-only mirror. Comments are one set across the authoring tabs and export together.
 

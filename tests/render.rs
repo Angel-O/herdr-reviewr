@@ -6,6 +6,7 @@ mod common;
 use common::{Repo, app_on, enter_tab};
 use herdr_reviewr::app::{App, Focus, Tab};
 use herdr_reviewr::config::NavigatorPosition;
+use herdr_reviewr::herdr::AgentChoice;
 use herdr_reviewr::keymap::Keymap;
 use herdr_reviewr::model::Scope;
 use herdr_reviewr::ui::{self, HeaderHit};
@@ -2433,4 +2434,191 @@ mod search_row_emphasis {
             "the match highlight lands on the match, past the multibyte head",
         );
     }
+}
+
+// --- Agent picker (specs/herdr-host.md) ----------------------------------------------------
+
+fn agent_row(pane: &str, name: &str, state: &str, tab: &str) -> AgentChoice {
+    AgentChoice { pane_id: pane.into(), name: name.into(), state: state.into(), tab: tab.into() }
+}
+
+/// One saved comment on the first added line, so the picker has a count to title itself with.
+fn write_comment(app: &mut App, text: &str) {
+    composing(app);
+    app.input = text.to_string();
+    app.submit_comment();
+}
+
+/// An app with three comments and the picker open, matching the spec's mockup.
+fn picker_app() -> App {
+    let mut app = edited_app();
+    for text in ["one", "two", "three"] {
+        write_comment(&mut app, text);
+    }
+    app.open_picker(
+        vec![
+            agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
+            agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
+            agent_row("w8:p3", "codex", "working", "3"),
+        ],
+        None,
+    );
+    app
+}
+
+#[test]
+fn the_last_sent_row_carries_its_tag_and_no_other_row_does() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    // A prior send to release-bot arms the highlight there and tags the row, so the
+    // remembered default reads before `enter` fires it (specs/herdr-host.md).
+    app.last_sent_pane = Some("w8:p2".to_string());
+    app.open_picker(
+        vec![
+            agent_row("w8:p1", "claude", "idle", "1"),
+            agent_row("w8:p2", "release-bot", "idle", "2"),
+        ],
+        None,
+    );
+    assert_eq!(app.picker_cursor, 1, "the highlight arms on the last-sent agent");
+    let out = render(&app);
+
+    let tagged = out.lines().find(|l| l.contains("release-bot")).unwrap_or_default();
+    assert!(tagged.contains("· last used"), "the last-sent row is tagged: {tagged:?}");
+    let plain = out.lines().find(|l| l.contains("claude")).unwrap_or_default();
+    assert!(!plain.contains("last used"), "no other row is tagged: {plain:?}");
+}
+
+#[test]
+fn an_open_picker_dims_the_view_behind_it_but_never_the_footer() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let plain = render_buffer(&app);
+    app.open_picker(
+        vec![agent_row("w8:p1", "claude", "idle", "1"), agent_row("w8:p2", "codex", "idle", "2")],
+        None,
+    );
+    let dimmed = render_buffer(&app);
+
+    // The tab bar recedes toward the theme base while the picker is up (specs/tui.md).
+    // Locate a lettered header cell rather than assuming a column, so a header layout
+    // change cannot silently repoint the assertion.
+    let x = (0..plain.area.width)
+        .find(|&x| {
+            plain
+                .cell((x, 0))
+                .is_some_and(|c| c.symbol().chars().all(char::is_alphanumeric) && c.symbol() != " ")
+        })
+        .expect("a lettered cell in the tab bar");
+    let cell = |buf: &Buffer, x: u16, y: u16| buf.cell((x, y)).unwrap().clone();
+    assert_eq!(cell(&plain, x, 0).symbol(), cell(&dimmed, x, 0).symbol());
+    assert_ne!(cell(&plain, x, 0).fg, cell(&dimmed, x, 0).fg, "the header cell is scrimmed");
+
+    // The footer is the picker's own key bar, so its primary hint keeps full brightness.
+    let footer_y = dimmed.area.height - 1;
+    let bright =
+        (0..dimmed.area.width).any(|x| dimmed.cell((x, footer_y)).is_some_and(|c| c.fg == PEACH));
+    assert!(bright, "the footer's primary key hint stays at full brightness");
+}
+
+#[test]
+fn the_picker_titles_the_count_and_aligns_the_dim_trail_in_one_column() {
+    let app = picker_app();
+    let out = render(&app);
+
+    assert!(out.contains("Send 3 comments to"), "the title counts the comments:\n{out}");
+
+    let rows: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("claude") || l.contains("release-bot") || l.contains("codex"))
+        .collect();
+    assert_eq!(rows.len(), 3, "one row per agent:\n{out}");
+
+    // The names pad to the widest, so every dim trail starts in the same column.
+    let starts: Vec<usize> = rows
+        .iter()
+        .map(|l| l.find("idle").or_else(|| l.find("working")).expect("a state on every row"))
+        .collect();
+    assert!(starts.windows(2).all(|w| w[0] == w[1]), "trails misaligned at {starts:?}:\n{out}");
+
+    // The tab trails behind the state, separated by the dim dot.
+    assert!(rows[0].contains("idle · Grip Outreach"), "{:?}", rows[0]);
+    assert!(rows[2].contains("working · 3"), "{:?}", rows[2]);
+}
+
+#[test]
+fn the_picker_numbers_only_the_rows_a_digit_key_can_reach() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let rows: Vec<AgentChoice> = (1..=11)
+        .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
+        .collect();
+    app.open_picker(rows, None);
+    let out = render(&app);
+
+    for i in 1..=9 {
+        let row = out.lines().find(|l| l.contains(&format!("agent{i} "))).unwrap_or_default();
+        assert!(row.contains(&format!(" {i}  ")), "row {i} carries its digit: {row:?}");
+    }
+    // Rows past the ninth are reached by movement, so they carry no number to press.
+    let tenth = out.lines().find(|l| l.contains("agent10")).unwrap_or_default();
+    assert!(!tenth.contains(" 10 "), "row 10 must not advertise an unreachable key: {tenth:?}");
+}
+
+#[test]
+fn a_picker_taller_than_the_pane_scrolls_to_keep_the_highlight_visible() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let rows: Vec<AgentChoice> = (1..=20)
+        .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
+        .collect();
+    app.open_picker(rows, None);
+
+    // A short frame cannot show twenty rows; the last one is still reachable.
+    let short = dump(&render_size(&app, 80, 12));
+    assert!(!short.contains("agent20"), "the tail is clipped at this height:\n{short}");
+
+    app.picker_goto(19);
+    let scrolled = dump(&render_size(&app, 80, 12));
+    assert!(scrolled.contains("agent20"), "the view follows the highlight:\n{scrolled}");
+
+    // The popup clamps to the body band, so even this over-tall picker never covers the
+    // footer — the one surface advertising its keys (specs/tui.md).
+    let last_row = scrolled.lines().last().unwrap_or_default().to_string();
+    assert!(last_row.contains("enter"), "the footer keeps the picker's keys: {last_row:?}");
+}
+
+#[test]
+fn a_click_on_a_picker_row_moves_the_highlight_and_misses_stay_inert() {
+    let mut app = picker_app();
+    let area = Rect::new(0, 0, 140, 40);
+    let out = render(&app);
+
+    let (row_y, line) = out
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("codex"))
+        .map(|(y, l)| (y as u16, l.to_string()))
+        .expect("the codex row is painted");
+    let col = line.find("codex").expect("a column inside the row") as u16;
+
+    assert_eq!(ui::hit_picker_row(area, &app, col, row_y), Some(2));
+    // The title row and everything outside the popup are inert (specs/input.md).
+    assert_eq!(ui::hit_picker_row(area, &app, col, row_y - 3), None);
+    assert_eq!(ui::hit_picker_row(area, &app, 0, 0), None);
+
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+            column: col,
+            row: row_y,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        &[],
+        &Keymap::default(),
+    )
+    .unwrap();
+    assert_eq!(app.picker_cursor, 2, "a click moves the highlight to the clicked row");
 }

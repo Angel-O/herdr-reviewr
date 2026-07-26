@@ -52,7 +52,7 @@ use ratatui::layout::Rect;
 
 use crate::app::{App, Focus, Mode};
 use crate::config::{Config, PluginConfig};
-use crate::export::{Agent, Clipboard};
+use crate::export::Clipboard;
 use crate::keymap::Keymap;
 use crate::model::Scope;
 
@@ -1439,6 +1439,26 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
         return Ok(());
     }
 
+    // The agent picker is strictly modal: `enter` sends, `esc` cancels, the movement bindings
+    // and the literal digits move the highlight, and every other key is inert. `q` must not
+    // quit here and `y` must not copy, or a habitual keystroke destroys or consumes the whole
+    // review while the picker is up (`specs/input.md`).
+    if app.mode == Mode::Picker {
+        match (action, key.code) {
+            (_, Esc) => app.close_picker(),
+            (_, Enter) => app.picker_pick(),
+            (Some(K::Down), _) => app.picker_move(1),
+            (Some(K::Up), _) => app.picker_move(-1),
+            // Literal digits, whatever `tab-changes` and its siblings are bound to
+            // (`specs/input.md`).
+            (_, Char(c @ '1'..='9')) => {
+                app.picker_goto(c as usize - '1' as usize);
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // The comments-list overlay acts through the same bindings and closes on `esc` and the
     // `comments` binding (`specs/input.md`).
     if app.mode == Mode::List {
@@ -1446,7 +1466,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             (Some(K::Comments), _) | (_, Esc) => app.close_list(),
             (Some(K::Down), _) => app.list_move(1),
             (Some(K::Up), _) => app.list_move(-1),
-            (Some(K::Send), _) => app.export(&Agent),
+            (Some(K::Send), _) => app.send_to_agent(),
             (Some(K::Copy), _) => app.export(&Clipboard),
             (Some(K::Edit), _) => app.start_edit(),
             (Some(K::Delete), _) => app.delete_comment(),
@@ -1486,7 +1506,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             // off-screen cursor. (The comments-list overlay targets the highlighted row instead.)
             K::Edit if app.focus == Focus::Diff => app.start_edit(),
             K::Delete if app.focus == Focus::Diff => app.delete_comment(),
-            K::Send => app.export(&Agent),
+            K::Send => app.send_to_agent(),
             K::Copy => app.export(&Clipboard),
             K::NextComment => app.jump_comment(1),
             K::PrevComment => app.jump_comment(-1),
@@ -1590,8 +1610,18 @@ pub fn handle_mouse(
 
     // A modal captures new mouse gestures, but a divider gesture cancelled by the key that
     // opened it still owns its remaining drag and mouse-up events.
-    if app.composing() || app.mode == Mode::List {
+    if app.composing() || app.mode == Mode::List || app.mode == Mode::Picker {
         match m.kind {
+            // A first click moves the highlight; a click on the already-highlighted row
+            // sends. Two gestures to fire, so no single mis-click sends the review. Every
+            // other gesture is inert, and none reaches the view behind (`specs/input.md`).
+            MouseEventKind::Down(MouseButton::Left) if app.mode == Mode::Picker => {
+                match ui::hit_picker_row(area, app, m.column, m.row) {
+                    Some(i) if i == app.picker_cursor => app.picker_pick(),
+                    Some(i) => app.picker_goto(i),
+                    None => {}
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if app.divider_drag_captured() => {
                 return Ok(());
             }
@@ -1677,7 +1707,7 @@ pub fn handle_mouse(
                 match hit {
                     ui::HeaderHit::Tab(tab) => app.set_tab(tab)?,
                     ui::HeaderHit::Scope => app.set_scope(app.scope.cycle())?,
-                    ui::HeaderHit::Send => app.export(&Agent),
+                    ui::HeaderHit::Send => app.send_to_agent(),
                 }
             } else if let Some(i) =
                 ui::hit_file(area, app, m.column, m.row, app.file_rows.len(), app.file_scroll)

@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::diff::{DiffCache, FileDiff, Row, View};
-use crate::export::{ExportTarget, format_all};
+use crate::export::{Agent, ExportTarget, format_all};
 use crate::file_list::{self, Annotation, Entry, RowKind};
 use crate::forge;
 use crate::git;
+use crate::herdr::{self, AgentChoice, SendTarget};
 use crate::highlight::Highlighter;
 use crate::logln;
 use crate::model::{Comment, CommentStore, Scope, Side};
@@ -128,6 +129,9 @@ pub enum Mode {
     },
     /// Browsing the comments-list overlay.
     List,
+    /// Choosing which agent a `Send` goes to (`specs/herdr-host.md`). Its rows and highlight
+    /// live in [`App::picker_rows`] and [`App::picker_cursor`].
+    Picker,
     /// The search screen, replacing the body from any tab (specs/search.md). Its state
     /// lives in [`App::search`].
     Search,
@@ -331,6 +335,11 @@ pub enum FooterAction {
     Newline,
     Cancel,
     CloseList,
+    /// The agent picker's own bar: send to the highlight, move it, and cancel
+    /// (`specs/input.md`). The digits are literal here, so the move hint names them.
+    PickAgent,
+    MovePickerRow,
+    ClosePicker,
     OpenPr,
     Refresh,
     Tabs,
@@ -456,6 +465,16 @@ pub struct App {
     pub select_anchor: Option<usize>,
     pub store: CommentStore,
     pub list_cursor: usize,
+    /// The picker's rows, frozen at the moment it opened. A refresh behind it adds, drops,
+    /// and reorders nothing (`specs/herdr-host.md`).
+    pub picker_rows: Vec<AgentChoice>,
+    pub picker_cursor: usize,
+    /// The mode the picker opened over — `Normal`, the comments list, or the find band —
+    /// so closing it restores the view the reviewer sent from (`specs/input.md`).
+    pub picker_over: Mode,
+    /// The agent this session last sent to, which arms the picker's highlight. Only a
+    /// successful send sets it (`specs/herdr-host.md`).
+    pub last_sent_pane: Option<String>,
     pub mode: Mode,
     pub input: String,
     /// The comment editor's caret: a char index into `input` (`0..=chars().count()`).
@@ -606,6 +625,10 @@ impl App {
             select_anchor: None,
             store: CommentStore::new(),
             list_cursor: 0,
+            picker_rows: Vec::new(),
+            picker_cursor: 0,
+            picker_over: Mode::Normal,
+            last_sent_pane: None,
             mode: Mode::Normal,
             input: String::new(),
             caret: 0,
@@ -692,11 +715,13 @@ impl App {
     /// Block the sidebar on one whole-file configuration failure.
     pub fn set_config_error(&mut self, error: String) {
         self.cancel_divider_drag();
-        // The search overlay and the find band close when the config view takes over; recovery
-        // restores the tab beneath them, and the query is not restored (specs/search.md,
-        // specs/find-in-file.md).
+        // The search overlay, the find band, and the agent picker close when the config view
+        // takes over; recovery restores the tab beneath them. The query is not restored, and
+        // neither are the picker's frozen rows, which would be stale by then (specs/search.md,
+        // specs/find-in-file.md, specs/herdr-host.md).
         self.close_search();
         self.close_find();
+        self.close_picker();
         self.config = PluginConfigState::Blocked { error };
         self.pr_pending = None;
     }
@@ -728,6 +753,9 @@ impl App {
         // The footer expansion is one global toggle, carried regardless of the recovered mode
         // (`specs/input.md`).
         self.keys_expanded = old.keys_expanded;
+        // The `last used` arming is session memory, like the comments themselves — a config
+        // error must not forget which agent the session sent to (`specs/herdr-host.md`).
+        self.last_sent_pane = old.last_sent_pane.take();
         self.navigator_side_pct = old.navigator_side_pct;
         self.navigator_stack_pct = old.navigator_stack_pct;
         self.search_pct = old.search_pct;
@@ -737,10 +765,11 @@ impl App {
         self.world_request = old.world_request.take();
         let old_mode = old.mode.clone();
         match old_mode {
-            // `set_config_error` closes the search overlay and the find band before the mode is
-            // stored, so neither reaches recovery; their query is not restored (specs/search.md,
-            // specs/find-in-file.md).
-            Mode::Normal | Mode::Search | Mode::Find => {}
+            // `set_config_error` closes the search overlay, the find band, and the agent picker
+            // before the mode is stored, so none reaches recovery; the search query is not
+            // restored and the picker's frozen rows are not either (specs/search.md,
+            // specs/find-in-file.md, specs/herdr-host.md).
+            Mode::Normal | Mode::Search | Mode::Find | Mode::Picker => {}
             Mode::List | Mode::Composing { .. } => {
                 self.scope = old.scope;
                 self.tab = old.tab;
@@ -944,10 +973,11 @@ impl App {
             .min(self.file_rows.len().saturating_sub(1));
         // A poll preserves the file-list wheel scroll — it does not reveal the cursor.
         // Explicit actions (navigation, a scope switch) request their own reveal.
-        // While a modal is open — composing a comment, or the comments-list overlay — the
-        // open diff is frozen, so a poll can't shift the anchor beneath the writer or reset
-        // the scroll/selection under the overlay. The file list still updates above.
-        if !self.composing() && self.mode != Mode::List {
+        // While a modal is open — composing a comment, the comments-list overlay, or the agent
+        // picker — the open diff is frozen, so a poll can't shift the anchor beneath the writer,
+        // reset the scroll/selection under the overlay, or move the reviewer's place while they
+        // choose an agent (specs/herdr-host.md). The file list still updates above (specs/tui.md).
+        if !self.composing() && self.mode != Mode::List && self.mode != Mode::Picker {
             // A poll keeps the reader on the same file; only a different shown file resets
             // the diff view to the top. It also drops an armed crossing, which was armed at the
             // edge of a file that is no longer the one on screen (specs/input.md).
@@ -2404,7 +2434,7 @@ impl App {
             Mode::Composing { .. } => Some((&mut self.input, &mut self.caret)),
             Mode::Search => self.search.as_mut().map(|s| (&mut s.query, &mut s.caret)),
             Mode::Find => self.find.as_mut().map(|f| (&mut f.query, &mut f.caret)),
-            Mode::Normal | Mode::List => None,
+            Mode::Normal | Mode::List | Mode::Picker => None,
         }
     }
 
@@ -2619,7 +2649,7 @@ impl App {
                 };
                 Some(c.location())
             }
-            Mode::Normal | Mode::List | Mode::Search | Mode::Find => None,
+            Mode::Normal | Mode::List | Mode::Picker | Mode::Search | Mode::Find => None,
         }
     }
 
@@ -3106,6 +3136,9 @@ impl App {
                     (A::DeleteComment, Do),
                 ];
             }
+            Mode::Picker => {
+                return vec![(A::PickAgent, Primary), (A::ClosePicker, Do), (A::MovePickerRow, Do)];
+            }
             Mode::Search => {
                 // With nothing pickable — warming, errored, or no matches — only the
                 // mode flip and the exit are offered, so the bar never lists a key that
@@ -3264,6 +3297,86 @@ impl App {
             self.list_cursor = step(self.list_cursor, delta, self.store.len());
         }
     }
+}
+
+/// The row the picker's highlight opens on: the agent this session sent to last, else the
+/// pane the sidebar was opened beside, else the first row. Each level is skipped unless it is
+/// still a candidate, so a closed pane falls through (`specs/herdr-host.md`). Pure, so the
+/// arming is tested without the environment the real levels come from.
+#[must_use]
+pub fn armed_row(rows: &[AgentChoice], last_sent: Option<&str>, beside: Option<&str>) -> usize {
+    let row_of = |pane: &str| rows.iter().position(|row| row.pane_id == pane);
+    last_sent.and_then(row_of).or_else(|| beside.and_then(row_of)).unwrap_or(0)
+}
+
+impl App {
+    /// `Send`: one agent goes straight out, several open the picker, none refuses and names
+    /// the clipboard (`specs/herdr-host.md`). The empty-store guard in [`Self::export`] keeps
+    /// precedence, so `Send` with nothing written opens no picker.
+    pub fn send_to_agent(&mut self) {
+        if self.store.is_empty() {
+            self.status = "no comments to send".to_string();
+            return;
+        }
+        match herdr::send_target() {
+            Ok(SendTarget::One(agent)) => self.export_to_agent(&agent),
+            Ok(SendTarget::Many(rows)) => self.open_picker(rows, herdr::opened_beside().as_deref()),
+            Err(e) => self.status = format!("agent failed: {e}"),
+        }
+    }
+
+    /// Open the picker over `rows`, arming the highlight on the first row that is still a
+    /// candidate: the agent this session sent to last, else the `beside` pane the sidebar was
+    /// opened next to, else the first row (`specs/herdr-host.md`). `beside` is a parameter so
+    /// the environment is read once at the send boundary, never ambiently.
+    pub fn open_picker(&mut self, rows: Vec<AgentChoice>, beside: Option<&str>) {
+        self.picker_cursor = armed_row(&rows, self.last_sent_pane.as_deref(), beside);
+        self.picker_rows = rows;
+        self.picker_over = self.mode.clone();
+        self.mode = Mode::Picker;
+    }
+
+    /// Close the picker back onto the view it opened over, so a reviewer who sent from the
+    /// comments list or with the find band open is not dropped into `Normal` (`specs/input.md`).
+    pub fn close_picker(&mut self) {
+        if self.mode == Mode::Picker {
+            self.mode = std::mem::replace(&mut self.picker_over, Mode::Normal);
+        } else {
+            self.picker_over = Mode::Normal;
+        }
+        self.picker_rows.clear();
+        self.picker_cursor = 0;
+    }
+
+    pub fn picker_move(&mut self, delta: isize) {
+        if self.mode == Mode::Picker && !self.picker_rows.is_empty() {
+            self.picker_cursor = step(self.picker_cursor, delta, self.picker_rows.len());
+        }
+    }
+
+    /// Move the highlight to `row`, for a digit key or a click. A row past the end is inert
+    /// rather than clamped, so a mistyped digit never arms a neighbour (`specs/input.md`).
+    pub fn picker_goto(&mut self, row: usize) {
+        if self.mode == Mode::Picker && row < self.picker_rows.len() {
+            self.picker_cursor = row;
+        }
+    }
+
+    /// Send every comment to the highlighted agent, then close whatever the outcome. A
+    /// failure reports and keeps the comments, so the reviewer can reopen a fresh picker
+    /// rather than retry against a frozen row (`specs/herdr-host.md`).
+    pub fn picker_pick(&mut self) {
+        let Some(agent) = self.picker_rows.get(self.picker_cursor).cloned() else { return };
+        self.close_picker();
+        self.export_to_agent(&agent);
+    }
+
+    /// Export to one decided pane. Nothing re-resolves it, so a pane that closed while the
+    /// picker was open fails here and keeps every comment (`specs/herdr-host.md`).
+    fn export_to_agent(&mut self, agent: &AgentChoice) {
+        let target = Agent { pane: agent.pane_id.clone(), name: agent.name.clone() };
+        self.export(&target);
+    }
 
     /// Send/copy every written comment to `target`; consume the whole set only on
     /// success. A failed export leaves all comments in place (`specs/review-model.md`).
@@ -3280,6 +3393,12 @@ impl App {
             Ok(()) => {
                 self.store.take_all();
                 self.status = target.success_message(n);
+                // Only a successful send arms the next picker's highlight, and the pane
+                // comes from the target itself, so `last used` can never name a pane the
+                // export did not address (`specs/herdr-host.md`).
+                if let Some(pane) = target.pane() {
+                    self.last_sent_pane = Some(pane.to_string());
+                }
                 logln!("export OK");
             }
             Err(e) => {
@@ -3517,6 +3636,18 @@ mod tests {
         assert!(recovered.preview, "the preview choice survives config recovery");
         assert_eq!(recovered.preview_scroll, 7);
         assert_eq!(recovered.preview_text(), "# doc");
+    }
+
+    #[test]
+    fn config_recovery_carries_the_last_sent_agent() {
+        // The `last used` arming is session memory: a config error between two sends must
+        // not move the next picker's default (`specs/herdr-host.md`).
+        let mut old = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        old.last_sent_pane = Some("w8:p2".to_string());
+
+        let mut recovered = App::new(PathBuf::from("."), Scope::Uncommitted, None);
+        recovered.carry_authored_state_from(&mut old);
+        assert_eq!(recovered.last_sent_pane.as_deref(), Some("w8:p2"));
     }
 
     #[test]

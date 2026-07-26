@@ -9,13 +9,14 @@
 use serde::Deserialize;
 
 /// The agent status reported by `herdr agent list` (`agent_status`).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Idle,
     Working,
     Blocked,
     Done,
+    #[default]
     #[serde(other)]
     Unknown,
 }
@@ -26,6 +27,18 @@ impl Status {
     /// transient overlay) are mid-turn, so they are not resting.
     fn is_resting(self) -> bool {
         matches!(self, Status::Idle | Status::Done)
+    }
+
+    /// The wire spelling herdr uses, which is both the picker's fallback label and the key
+    /// its `state_labels` map is looked up by (`specs/herdr-host.md`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Idle => "idle",
+            Status::Working => "working",
+            Status::Blocked => "blocked",
+            Status::Done => "done",
+            Status::Unknown => "unknown",
+        }
     }
 }
 
@@ -97,6 +110,17 @@ impl TurnTracker {
 #[cfg(test)]
 mod tests {
     use super::{Status, TurnTracker};
+
+    #[test]
+    fn as_str_matches_the_serde_wire_spelling_for_every_variant() {
+        // `as_str` is the `state_labels` lookup key and the picker's fallback label, so it
+        // must never drift from the spelling serde parses (`specs/herdr-host.md`).
+        for status in [Status::Idle, Status::Working, Status::Blocked, Status::Done] {
+            let wire = format!("\"{}\"", status.as_str());
+            assert_eq!(serde_json::from_str::<Status>(&wire).unwrap(), status);
+        }
+        assert_eq!(Status::Unknown.as_str(), "unknown");
+    }
 
     #[test]
     fn a_turn_starts_when_working_follows_a_resting_status() {

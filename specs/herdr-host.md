@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-18
+Last edited: 2026-07-26
 ---
 
 # herdr host
@@ -119,24 +119,63 @@ The binary reviews the pane's working directory, normalized to its git top level
 
 ## Sending to the agent
 
-`Send` hands over every written comment at once. The target is resolved in order:
+`Send` hands over every written comment at once, to a single agent. reviewr never guesses which agent that is.
 
-1. the sole agent in the sidebar's tab,
-2. else the sole agent in its workspace.
+| herdr reports          | `Send` does                                                              |
+| ---------------------- | ------------------------------------------------------------------------ |
+| one agent              | writes every comment into its input without submitting, then focuses it  |
+| several agents         | opens the agent picker                                                   |
+| no agent, or no answer | refuses and names the clipboard copy (→ HH-REFUSE-SAYS-CLIPBOARD)        |
 
-reviewr writes the comment blocks into the agent pane without submitting, then focuses it. You add context and press enter.
+Candidates come from the sidebar's workspace, whatever the placement. The send asks rather than resolves. No scope inside the workspace wins over another.
 
 The candidate rules, coded for citation:
 
-| code                       | Always true                                                            |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `HH-AGENT-PANES`           | Only panes carrying an `agent` field are candidates.                    |
-| `HH-NOT-SELF`              | The sidebar's own pane is never a candidate.                            |
-| `HH-TAB-WINS`              | A sole tab agent wins over the workspace fallback.                      |
-| `HH-SOLE-OR-REFUSE`        | Zero or several candidates refuse the send. Nothing is sent partially.  |
-| `HH-REFUSE-SAYS-CLIPBOARD` | A refusal says why and points at the clipboard copy.                    |
+| code                       | Always true                                                        |
+| -------------------------- | ------------------------------------------------------------------ |
+| `HH-AGENT-PANES`           | Only panes carrying an `agent` field are candidates.               |
+| `HH-NOT-SELF`              | The sidebar's own pane is never a candidate.                       |
+| `HH-TAB-WINS`              | Turn tracking only: a sole tab agent wins over the workspace pool. |
+| `HH-REFUSE-SAYS-CLIPBOARD` | A refusal says why and points at the clipboard copy.               |
 
-With `tab` placement the sidebar has its own tab, so resolution goes straight to the workspace fallback.
+### Agent picker
+
+Each row leads with the agent's name. Its state and tab trail dim behind. The highlight is a
+row fill, and everything behind the popup recedes except the footer (`tui.md`).
+
+```
+┌ Send 3 comments to ─────────────────────────────────────────┐
+│ 1  claude        idle · Grip Outreach · last used           │  ← highlighted, filled row
+│ 2  release-bot   idle · Grip Outreach Campaign              │
+│ 3  codex         working · 3                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Every part comes from herdr:
+
+| part  | herdr source                                                            |
+| ----- | ----------------------------------------------------------------------- |
+| name  | the agent's `name`, else its `display_agent`, else its kind             |
+| state | the agent's `state_labels` entry for its state, else the state itself   |
+| tab   | the tab's label                                                         |
+
+Two agents in one tab read alike until `herdr agent rename` names one.
+
+The highlight opens on the first of these that is still a candidate:
+
+1. the agent this session sent to last,
+2. the agent the sidebar was opened beside,
+3. the first row.
+
+Only a successful send sets the first level. The last-sent row carries a dim `last used` tag,
+so the remembered default reads before `enter` fires it.
+
+- Rows follow herdr's own order for the workspace, tab before tab and pane before pane inside a tab.
+- Only the first nine rows carry a number.
+- The row set and its order freeze when the picker opens. A refresh behind it never adds, drops, or reorders a row.
+- The picker is a mid-gesture hold, so a refresh behind it never moves the reviewer's place (`overview.md`).
+
+The send addresses the pane on the chosen row. A pane that closed while the picker was open fails the send, and every comment stays. A successful send focuses the chosen agent and names it.
 
 ## Clipboard
 
@@ -180,6 +219,7 @@ Send and tracking:
 ## Related specs
 
 - [configuration](./config.md)
+- [input](./input.md)
 - [overview](./overview.md)
 - [review-model](./review-model.md)
 - [theme](./theme.md)

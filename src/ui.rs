@@ -23,6 +23,7 @@ use crate::config::NavigatorPosition;
 use crate::diff::{FileDiff, FileState, Row};
 use crate::file_list::{Annotation, RowKind};
 use crate::forge;
+use crate::herdr::AgentChoice;
 use crate::keymap::Keymap;
 use crate::model::Comment;
 use crate::theme::Palette;
@@ -69,7 +70,32 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_footer(frame, app, p.status);
 
     if app.mode == Mode::List {
+        scrim_behind(frame, app, area);
         render_comments_list(frame, app, area);
+    }
+    if app.mode == Mode::Picker {
+        scrim_behind(frame, app, area);
+        render_agent_picker(frame, app, area);
+    }
+}
+
+/// Recede everything behind an open modal, except the footer: every painted color in the tab
+/// bar and the body blends halfway to the theme base, so the modal owns the eye while the page
+/// stays recognizable. The footer stays bright — while a modal is open it is the modal's own
+/// key bar, the one place advertising the live keys (`specs/tui.md`, `specs/input.md`).
+fn scrim_behind(frame: &mut Frame, app: &App, area: Rect) {
+    let p = *app.palette();
+    let bands = panes(area, app);
+    let buf = frame.buffer_mut();
+    for band in [bands.tab, bands.body] {
+        for y in band.y..band.y + band.height {
+            for x in band.x..band.x + band.width {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.fg = p.scrim(cell.fg);
+                    cell.bg = p.scrim(cell.bg);
+                }
+            }
+        }
     }
 }
 
@@ -601,7 +627,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                         Span::styled(format!("{indent}{arrow}"), Style::default().fg(p.overlay0)),
                         Span::styled(format!("{}/", row.name), name_style),
                     ];
-                    selectable_row(spans, width, fill)
+                    selectable_row(p, spans, width, fill)
                 }
                 RowKind::File { annotation, .. } => file_row_item(
                     &FileRowSpec {
@@ -686,7 +712,7 @@ fn file_row_item(
         spans.push(Span::raw(" ".repeat(pad)));
         spans.extend(stats_spans(additions, deletions, p));
     }
-    selectable_row(spans, width, fill)
+    selectable_row(p, spans, width, fill)
 }
 
 /// The `+a −d` stats text, dropping a side that is zero (`+210`, `−4`, or empty); used to
@@ -1368,7 +1394,7 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.peach))
-        .title(title);
+        .title(framed_title(&title));
     let content_w = composer_content_width(area.width as usize);
     let body = Paragraph::new(composer_lines(app, content_w)).block(block);
     frame.render_widget(body, area);
@@ -1419,8 +1445,10 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         A::Copy => (hint(K::Copy), "copy"),
         A::Save => ("enter".into(), "save"),
         A::Newline => ("shift+enter".into(), "newline"),
-        A::Cancel => ("esc".into(), "cancel"),
+        A::Cancel | A::ClosePicker => ("esc".into(), "cancel"),
         A::CloseList | A::CloseSearch | A::CloseFind => ("esc".into(), "close"),
+        A::PickAgent => ("enter".into(), "send"),
+        A::MovePickerRow => ("1-9 ↑↓".into(), "move"),
         A::Search => (hint(K::Search), "search"),
         A::Find => (hint(K::Find), "find"),
         A::Wrap => (hint(K::Wrap), "wrap"),
@@ -1696,7 +1724,7 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.mauve))
-        .title(format!("Comments ({})", app.store.len()));
+        .title(framed_title(&format!("Comments ({})", app.store.len())));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -1707,7 +1735,7 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, c)| {
             let loc = Span::styled(
-                c.location(),
+                format!(" {}", c.location()),
                 Style::default().fg(p.mauve).add_modifier(Modifier::BOLD),
             );
             let mut spans = vec![loc, Span::styled(format!("  {}", c.text), text_style(p))];
@@ -1717,10 +1745,133 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("  (stale)", Style::default().fg(p.red)));
             }
             // The list overlay is the active modal, so its row reads at full brightness.
-            selectable_row(spans, width, (i == app.list_cursor).then_some(p.surface2))
+            selectable_row(p, spans, width, (i == app.list_cursor).then_some(p.surface2))
         })
         .collect();
     frame.render_widget(List::new(items), inner);
+}
+
+/// The picker's popup: centered in the body band, and sized to its rows rather than to a
+/// fixed fraction. Three short rows in an 80%-tall box would be mostly empty, and a popup
+/// clamped to the body can never cover the footer, the one surface advertising its keys
+/// (`specs/herdr-host.md`, `specs/tui.md`).
+const PICKER_MIN_WIDTH: usize = 34;
+
+fn picker_popup(area: Rect, app: &App) -> Rect {
+    let body = panes(area, app).body;
+    let name_width = picker_name_width(app);
+    // " N  " + the padded name + "  " + the dim trail, then the two borders. The highlight is
+    // a row fill, not a glyph, so it costs no width.
+    let widest = app
+        .picker_rows
+        .iter()
+        .map(|row| 4 + name_width + 2 + picker_trail(app, row).width())
+        .max()
+        .unwrap_or(0);
+    let title = framed_title(&picker_title(app)).width() + 2;
+    // Rows, the two borders, and one column of air after the longest trail — the air sits
+    // inside the row, so the selection fill still reaches both borders. Never narrower than
+    // the floor, so a picker of short names still reads as a deliberate dialog.
+    let w = (widest + 3).max(title).max(PICKER_MIN_WIDTH).min(body.width as usize) as u16;
+    let h = (app.picker_rows.len() + 2).min(body.height as usize) as u16;
+    let x = body.x + (body.width.saturating_sub(w)) / 2;
+    let y = body.y + (body.height.saturating_sub(h)) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
+/// The popup's row region, from the same `Block` shape the renderer draws, so the hit test
+/// and the painted rows can never disagree about where a row starts.
+fn picker_inner(popup: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(popup)
+}
+
+/// The names pad to the widest, so the dim tails start in one column.
+fn picker_name_width(app: &App) -> usize {
+    app.picker_rows.iter().map(|row| row.name.width()).max().unwrap_or(0)
+}
+
+/// A row's dim trail: the state, ` · <tab>` when herdr gave the tab a label, and ` · last used`
+/// on the row of the agent this session last sent to — the remembered default reads before an
+/// irreversible `enter` fires it (`specs/herdr-host.md`).
+fn picker_trail(app: &App, row: &AgentChoice) -> String {
+    let tab = if row.tab.is_empty() { String::new() } else { format!(" · {}", row.tab) };
+    let last =
+        if app.last_sent_pane.as_deref() == Some(&row.pane_id) { " · last used" } else { "" };
+    format!("{}{tab}{last}", row.state)
+}
+
+fn picker_title(app: &App) -> String {
+    let n = app.store.len();
+    let noun = if n == 1 { "comment" } else { "comments" };
+    format!("Send {n} {noun} to")
+}
+
+/// The first visible row, so the highlight stays on screen in a picker taller than the pane
+/// (`specs/input.md`).
+fn picker_scroll(app: &App, rows: usize) -> usize {
+    if rows == 0 || app.picker_cursor < rows {
+        return 0;
+    }
+    (app.picker_cursor + 1).saturating_sub(rows).min(app.picker_rows.len().saturating_sub(rows))
+}
+
+fn render_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let p = app.palette();
+    let popup = picker_popup(area, app);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.mauve))
+        .title(framed_title(&picker_title(app)));
+    let inner = picker_inner(popup);
+    frame.render_widget(block, popup);
+
+    let name_width = picker_name_width(app);
+    let first = picker_scroll(app, inner.height as usize);
+    let items: Vec<ListItem> = app
+        .picker_rows
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(inner.height as usize)
+        .map(|(i, row)| {
+            // Only the first nine rows carry a number, since no digit key reaches further.
+            let lead = if i < 9 { format!(" {}  ", i + 1) } else { "    ".to_string() };
+            let pad = name_width.saturating_sub(row.name.width());
+            let spans = vec![
+                Span::styled(lead, Style::default().fg(p.overlay0)),
+                // The name is the only part at full brightness: it is what the reviewer scans
+                // for, and the two weights are what keep this a picker rather than a table.
+                Span::styled(row.name.clone(), text_style(p)),
+                Span::styled(
+                    format!("{}  {}", " ".repeat(pad), picker_trail(app, row)),
+                    Style::default().fg(p.overlay0),
+                ),
+            ];
+            selectable_row(
+                p,
+                spans,
+                inner.width as usize,
+                (i == app.picker_cursor).then_some(p.surface2),
+            )
+        })
+        .collect();
+    frame.render_widget(List::new(items), inner);
+}
+
+/// The picker row under the pointer, for click-to-highlight (`specs/input.md`). `None`
+/// anywhere else, including the border and the title, so those clicks stay inert.
+pub fn hit_picker_row(area: Rect, app: &App, col: u16, row: u16) -> Option<usize> {
+    let inner = picker_inner(picker_popup(area, app));
+    if col < inner.x
+        || col >= inner.x + inner.width
+        || row < inner.y
+        || row >= inner.y + inner.height
+    {
+        return None;
+    }
+    let index = picker_scroll(app, inner.height as usize) + (row - inner.y) as usize;
+    (index < app.picker_rows.len()).then_some(index)
 }
 
 // --- Search screen (specs/search.md) -------------------------------------------------------
@@ -2189,7 +2340,7 @@ fn search_code_row(
         spans.push(Span::styled(prefix.to_string(), Style::default().fg(p.overlay0)));
     }
     spans.extend(emphasized_spans(shown, &shifted, p.match_hl, |_| text_style(p)));
-    selectable_row(spans, width, fill)
+    selectable_row(p, spans, width, fill)
 }
 
 /// Expand tabs to four spaces, shifting the match byte spans to keep them over the same
@@ -2319,6 +2470,7 @@ fn text_style(p: &Palette) -> Style {
 /// in the UI reads the same. The fill is applied per span (with a trailing pad) so it
 /// spans the full width under the `List` widget, matching the diff's `Paragraph` rows.
 fn selectable_row(
+    p: &Palette,
     mut spans: Vec<Span<'static>>,
     width: usize,
     fill: Option<Color>,
@@ -2333,6 +2485,11 @@ fn selectable_row(
             // match still reads on the selected row; the rest take the selection fill.
             if s.style.bg.is_none() {
                 s.style = s.style.bg(bg);
+            }
+            // `overlay0` sits one surface step above the fill and all but vanishes on it;
+            // dim text lifts to `subtext0` so a selected row keeps its secondary parts.
+            if s.style.fg == Some(p.overlay0) {
+                s.style = s.style.fg(p.subtext0);
             }
             s.style = s.style.add_modifier(Modifier::BOLD);
         }
@@ -2488,7 +2645,7 @@ fn render_pr_nav(frame: &mut Frame, app: &App, area: Rect) {
         .take(viewport)
         .map(|row| {
             let selected = row.cursor == Some(app.pr_cursor);
-            selectable_row(row.spans, width, selected.then(|| p.cursor_bg(true)))
+            selectable_row(p, row.spans, width, selected.then(|| p.cursor_bg(true)))
         })
         .collect();
     frame.render_widget(List::new(items), inner);
@@ -2864,7 +3021,13 @@ fn bordered(title: &str, focused: bool, p: &Palette) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
-        .title(title.to_string())
+        .title(framed_title(title))
+}
+
+/// Every block title breathes: one space each side, so the text never touches the border
+/// run. One home for the affordance, so panes, the composer, and the popups agree.
+fn framed_title(title: &str) -> String {
+    if title.is_empty() { String::new() } else { format!(" {title} ") }
 }
 
 fn dim_paragraph<'a>(text: &'a str, p: &Palette) -> Paragraph<'a> {

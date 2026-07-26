@@ -1,4 +1,4 @@
-# herdr API notes (verified against herdr 0.7.1)
+# herdr API notes (verified against herdr 0.7.5)
 
 The herdr surface herdr-review depends on, confirmed live. herdr-review ships as a
 herdr **plugin** (`../herdr-plugin.toml`); the binary runs inside a plugin pane.
@@ -72,8 +72,20 @@ command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — plugin_id 
 ## Resolve the agent / send comments
 
 `herdr agent list` → `{"result":{"agents":[ {pane_id, tab_id, workspace_id, agent_status, ...} ]}}`.
-- Send target = the agent in the sidebar's `HERDR_TAB_ID`, else the sole agent in its `HERDR_WORKSPACE_ID`.
-- **Caveat:** the reviewr pane itself is listed as an agent — exclude `HERDR_PANE_ID` or the real agent looks ambiguous.
+It takes no flags, so the workspace filter and the row order are the caller's to apply.
+
+- Send candidates = every agent in the sidebar's `HERDR_WORKSPACE_ID`. One sends directly,
+  several open the picker (`../specs/herdr-host.md`). Turn tracking still resolves `HERDR_TAB_ID`
+  first, then the workspace.
+- 0.7.5 lists only real agent panes. A plugin sidebar or a plain shell appears in `pane list`
+  with `agent: null` and never in `agent list`, so `HH-NOT-SELF` is defensive rather than load-bearing.
+- `name`, `display_agent`, and `state_labels` are omitted entirely until something sets them.
+  `herdr agent rename <pane> <name>` makes `name` appear; `--clear` leaves it present and null.
+  Names are `[a-z0-9_-]{1,32}` and must start with a lowercase letter, so they carry no spaces.
+
+`herdr tab list --workspace <ws>` → `{"result":{"tabs":[ {tab_id, label, number, pane_count} ]}}`.
+`label` and `number` differ: a tab with `number: 4` defaults to `label: "1"`, a per-workspace
+ordinal. The picker joins `label` on `tab_id`, best effort.
 
 ```
 herdr pane send-text <agent_pane> "<literal text>"   # writes input, no Enter

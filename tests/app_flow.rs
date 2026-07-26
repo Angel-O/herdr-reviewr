@@ -7,9 +7,10 @@ use std::cell::RefCell;
 
 use anyhow::{Result, bail};
 use common::{Repo, app_on, enter_tab, typed};
-use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode};
+use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode, armed_row};
 use herdr_reviewr::config::NavigatorPosition;
 use herdr_reviewr::export::ExportTarget;
+use herdr_reviewr::herdr::AgentChoice;
 use herdr_reviewr::keymap::{Action, Key, Keymap};
 use herdr_reviewr::model::{Scope, Side};
 use herdr_reviewr::turn::Status;
@@ -40,6 +41,9 @@ impl FakeTarget {
 impl ExportTarget for FakeTarget {
     fn label(&self) -> &'static str {
         "fake"
+    }
+    fn pane(&self) -> Option<&str> {
+        Some("w8:p2")
     }
     fn success_message(&self, count: usize) -> String {
         let noun = if count == 1 { "comment" } else { "comments" };
@@ -4472,4 +4476,177 @@ mod search_overlay {
             "the frecency store lives under the cache dir"
         );
     }
+}
+
+// --- Agent picker (specs/herdr-host.md, specs/input.md) ------------------------------------
+
+fn choice(pane: &str, name: &str) -> AgentChoice {
+    AgentChoice { pane_id: pane.into(), name: name.into(), state: "idle".into(), tab: "1".into() }
+}
+
+fn three_agents() -> Vec<AgentChoice> {
+    vec![choice("w8:p1", "claude"), choice("w8:p2", "release-bot"), choice("w8:p3", "codex")]
+}
+
+/// An app with two comments written and the picker open over three agents.
+fn app_with_picker(r: &Repo) -> App {
+    let mut app = app_on(r);
+    comment_on(&mut app, '+', "one");
+    comment_on(&mut app, '-', "two");
+    app.open_picker(three_agents(), None);
+    app
+}
+
+#[test]
+fn the_highlight_arms_the_last_sent_agent_then_the_one_beside_then_row_one() {
+    let rows = three_agents();
+    // Level 1 wins whenever it is still a candidate.
+    assert_eq!(armed_row(&rows, Some("w8:p3"), Some("w8:p2")), 2);
+    // A last-sent pane that has since closed falls through to the pane opened beside.
+    assert_eq!(armed_row(&rows, Some("w8:pZ"), Some("w8:p2")), 1);
+    // Both absent or both closed land on the first row.
+    assert_eq!(armed_row(&rows, None, None), 0);
+    assert_eq!(armed_row(&rows, Some("w8:pZ"), Some("w8:pY")), 0);
+    // An own-tab sidebar has no pane it was opened beside, so it arms row 1 until its first send.
+    assert_eq!(armed_row(&rows, None, Some("w8:pY")), 0);
+}
+
+#[test]
+fn the_picker_moves_by_key_and_a_digit_past_the_last_row_is_inert() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    assert_eq!(app.picker_cursor, 0);
+
+    app.picker_move(1);
+    assert_eq!(app.picker_cursor, 1);
+    app.picker_move(-1);
+    assert_eq!(app.picker_cursor, 0);
+
+    app.picker_goto(2);
+    assert_eq!(app.picker_cursor, 2);
+    // A mistyped digit must not arm a neighbour the reviewer would then send to.
+    app.picker_goto(7);
+    assert_eq!(app.picker_cursor, 2, "a row past the end is inert, not clamped");
+}
+
+#[test]
+fn cancelling_the_picker_keeps_every_comment() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+    assert!(app.picker_rows.is_empty(), "the frozen rows are dropped with the picker");
+}
+
+#[test]
+fn only_a_successful_send_arms_the_next_pickers_highlight() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+
+    app.export(&FakeTarget::failing());
+    assert_eq!(app.store.len(), 2, "a failed send keeps every comment");
+    assert_eq!(app.last_sent_pane, None, "a failed send arms nothing");
+
+    app.export(&FakeTarget::ok());
+    assert!(app.store.is_empty(), "a successful send consumes the whole set");
+    assert_eq!(app.last_sent_pane.as_deref(), Some("w8:p2"), "the pane comes from the target");
+}
+
+#[test]
+fn a_picker_opened_from_the_comments_list_closes_back_onto_it() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "one");
+    comment_on(&mut app, '-', "two");
+    app.open_list();
+    app.open_picker(three_agents(), None);
+    assert_eq!(app.mode, Mode::Picker);
+
+    let keymap = Keymap::default();
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, Mode::List, "cancelling restores the list the reviewer was browsing");
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+
+    // The same restoration covers the find band: a header Send click while finding must
+    // not cost the reviewer their band when they cancel the picker.
+    app.close_list();
+    app.open_find();
+    let over_find = app.mode.clone();
+    app.open_picker(three_agents(), None);
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, over_find, "cancelling restores the find band");
+}
+
+#[test]
+fn the_picker_swallows_every_key_it_does_not_bind() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // `q` must not quit and `y` must not copy: both would destroy or consume the review while
+    // the picker is up, and both are live in the comments list (specs/input.md).
+    for code in [KeyCode::Char('q'), KeyCode::Char('y'), KeyCode::Char('r'), KeyCode::Char('s')] {
+        let mut app = app_with_picker(&r);
+        handle_key(&mut app, KeyEvent::from(code), area, &keymap).unwrap();
+        assert!(!app.should_quit, "{code:?} quit the app from the picker");
+        assert_eq!(app.mode, Mode::Picker, "{code:?} left the picker");
+        assert_eq!(app.store.len(), 2, "{code:?} consumed comments from the picker");
+    }
+}
+
+#[test]
+fn the_picker_digits_are_literal_whatever_the_tab_keys_are_bound_to() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+    let tab_before = app.tab;
+
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('2')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "`2` moved the highlight to row 2");
+    assert_eq!(app.tab, tab_before, "`2` did not switch tabs from inside the picker");
+}
+
+#[test]
+fn a_refresh_behind_the_picker_moves_neither_the_rows_nor_the_place() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    app.picker_goto(2);
+    let rows_before = app.picker_rows.clone();
+    let file_before = app.diff_path.clone();
+    let cursor_before = app.diff_cursor;
+
+    // A second file appears and the worktree changes underneath the open picker.
+    r.write("b.rs", "new\n");
+    app.reload().unwrap();
+
+    assert_eq!(app.picker_rows, rows_before, "the frozen rows never reorder or change");
+    assert_eq!(app.picker_cursor, 2, "the highlight stays where the reviewer put it");
+    assert_eq!(app.diff_path, file_before, "the place behind the picker is frozen");
+    assert_eq!(app.diff_cursor, cursor_before);
+}
+
+#[test]
+fn a_config_error_closes_the_picker_and_keeps_the_comments() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+
+    app.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_ne!(app.mode, Mode::Picker, "the picker's rows would be stale after recovery");
+    assert!(app.picker_rows.is_empty());
+    assert_eq!(app.store.len(), 2, "saved comments always survive a config error");
+}
+
+#[test]
+fn the_picker_owns_the_whole_footer_bar() {
+    let r = edited_repo();
+    let app = app_with_picker(&r);
+    let bands: Vec<FooterAction> = app.footer_bands().into_iter().map(|(a, _)| a).collect();
+    assert_eq!(
+        bands,
+        vec![FooterAction::PickAgent, FooterAction::ClosePicker, FooterAction::MovePickerRow]
+    );
 }

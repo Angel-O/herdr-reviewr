@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Send picks the agent when there are several.** `Send` used to refuse in a workspace with more
+  than one agent, leaving the clipboard as the only route, which reaches nothing when you review
+  over SSH. It now opens a picker listing every agent in the workspace. Move with the arrows or
+  `j`/`k`, jump with `1`–`9`, `enter` sends, `esc` keeps every comment. A click highlights a row,
+  and a click on the highlighted row sends. The highlight opens on the agent you sent to last,
+  marked `last used`, else the agent the sidebar was opened beside. A successful send names the
+  agent it went to.
+- **Modals own the screen.** While the picker or the comments list is open, everything behind it
+  dims toward the theme background. The footer stays bright with the modal's own keys.
+
+### Changed
+- One agent still sends straight through, with no picker. Turn tracking is unchanged.
+
 ## [0.24.1] — 2026-07-23
 
 ### Changed
