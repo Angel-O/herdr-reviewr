@@ -485,7 +485,7 @@ fn parse_plugin_config(path: &Path) -> Result<PluginConfig, PluginConfigError> {
 }
 
 /// One `[keybindings]` key string → a [`Key`](crate::keymap::Key): a bare character, or a
-/// character behind a `ctrl+`/`alt+` prefix (`specs/config.md` `CFG-KEY-FORM`). The character is
+/// character behind a `ctrl+`/`alt+` prefix (`specs/config.md`). The character is
 /// one visible cell — a positive display width also rejects the zero-width class `is_control`
 /// misses (format chars, combining marks).
 fn parse_key(text: &str) -> Option<crate::keymap::Key> {
@@ -508,7 +508,7 @@ fn parse_key(text: &str) -> Option<crate::keymap::Key> {
     }
 }
 
-/// Parse and resolve the `[keybindings]` table (`specs/config.md` `CFG-KEY-FORM`/`CFG-KEY-UNIQUE`):
+/// Parse and resolve the `[keybindings]` table (`specs/config.md`):
 /// action names from the keymap table in `specs/input.md`, each bound to a non-empty array of
 /// keys, a bare character or a `ctrl+`/`alt+` chord.
 fn parse_keybindings(
@@ -899,7 +899,7 @@ mod tests {
         // The `alt+` chord serializes back in config syntax, not the glyph.
         assert_eq!(config.to_json()["keybindings"]["find"], serde_json::json!(["alt+x"]));
 
-        // A malformed chord fails `CFG-KEY-FORM`.
+        // A malformed chord is an invalid value.
         std::fs::write(&path, "[keybindings]\nfind = [\"ctrl+\"]\n").unwrap();
         let error = super::plugin_config_in(dir.path()).unwrap_err().to_string();
         assert!(error.contains("`keybindings.find`") && error.contains("expected"), "{error}");

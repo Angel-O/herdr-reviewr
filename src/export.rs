@@ -41,6 +41,9 @@ pub trait ExportTarget {
     fn label(&self) -> &'static str;
     /// Destination-specific confirmation shown after a successful export.
     fn success_message(&self, count: usize) -> String;
+    /// Destination-specific line shown after a failed one. It is the whole status, so it is one
+    /// short sentence a reviewer can read, never the underlying error. The cause goes to the log.
+    fn failure_message(&self) -> String;
 }
 
 fn counted_comments(count: usize) -> String {
@@ -69,6 +72,10 @@ impl ExportTarget for Clipboard {
 
     fn success_message(&self, count: usize) -> String {
         format!("copied {}", counted_comments(count))
+    }
+
+    fn failure_message(&self) -> String {
+        "clipboard failed".to_string()
     }
 
     fn export(&self, text: &str) -> Result<()> {
@@ -122,6 +129,13 @@ impl ExportTarget for Agent {
     /// this line is the reviewer's only record of where the review went (`specs/input.md`).
     fn success_message(&self, count: usize) -> String {
         format!("added {} to {}", counted_comments(count), self.name)
+    }
+
+    /// The pane was resolved before the send and closed in between, which is the only way this
+    /// happens in practice. herdr's own wording is a JSON envelope around a pane id, so the
+    /// reviewer gets this instead and the payload goes to the log.
+    fn failure_message(&self) -> String {
+        "agent not found".to_string()
     }
 
     fn export(&self, text: &str) -> Result<()> {

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-26
+Last edited: 2026-07-27
 ---
 
 # herdr host
@@ -44,7 +44,7 @@ With valid plugin config, the shared rules are:
 | ------------------------ | ---------------------------------------------------------------------------- |
 | run it twice?            | it converges and exits 0, nothing stacks and nothing errors                   |
 | does `auto_open` gate?   | no, event-only rules never apply, any placement opens (→ HH-PLACEMENT-CONFIGURED) |
-| focus?                   | same rules as the toggle (→ HH-FOCUS-BY-PLACEMENT)                            |
+| focus?                   | same rules as the toggle                                                      |
 | on refusal, on success?  | exit 1 with one stderr line, exit 0 with one stdout line naming the pane      |
 | what counts as open?     | any pane labeled `reviewr` in the workspace, in any tab                       |
 | which workspace?         | the focused one, wherever the action is invoked from                          |
@@ -64,15 +64,14 @@ auto_open = false              # auto-open on worktree.created    (default: true
 
 The cross-action invariants, coded for citation:
 
-| code                      | Always true                                                                              |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| `HH-PLACEMENT-CONFIGURED` | Every open uses the placement named by `toggle_placement`.                                 |
-| `HH-EVENT-SPLIT-TAB`      | The event auto-opens only `split` and `tab`.                                               |
-| `HH-FOCUS-BY-PLACEMENT`   | A manual open keeps focus on the agent for `split`. It gives focus to reviewr otherwise.   |
-| `HH-ONE-SIDEBAR`          | At most one sidebar exists per workspace, in steady state.                                 |
-| `HH-EVENT-OFF`            | With `auto_open = false` the event does nothing.                                           |
+| code                      | Always true                                                 |
+| ------------------------- | ------------------------------------------------------------ |
+| `HH-PLACEMENT-CONFIGURED` | Every open uses the placement named by `toggle_placement`.  |
+| `HH-ONE-SIDEBAR`          | At most one sidebar exists per workspace, in steady state.  |
 
-A missing key uses its default. Invalid plugin config follows `config.md`. `toggle_direction` affects `split` only. The event never takes focus.
+A manual open keeps focus on the agent for `split`, and gives focus to reviewr otherwise. The event auto-opens `split` and `tab` only, never takes focus, and does nothing at all with `auto_open = false`.
+
+A missing key uses its default. Invalid plugin config follows `config.md`. `toggle_direction` affects `split` only.
 
 Each placement maps to one pane-open shape (`../docs/herdr-api-notes.md`):
 
@@ -95,14 +94,14 @@ A `split` or `zoomed` open attaches to the focused pane. When the context has no
 **Event with a covering placement**
 
 1. `toggle_placement = zoomed`. A worktree is created.
-2. The event fires. Zoomed is not an auto-open placement. Nothing opens (→ HH-EVENT-SPLIT-TAB).
-3. The user toggles later. A zoomed pane opens and takes focus (→ HH-FOCUS-BY-PLACEMENT).
+2. The event fires. Zoomed is not an auto-open placement. Nothing opens.
+3. The user toggles later. A zoomed pane opens and takes focus.
 
 **HH-EVENT-BESIDE-LAYOUT — event beside a layout plugin**
 
 1. `auto_open = false`. A layout plugin also handles `worktree.created`.
 2. A worktree is created. herdr runs both handlers in any order.
-3. reviewr opens nothing either way (→ HH-EVENT-OFF). The layout builds undisturbed.
+3. reviewr opens nothing either way. The layout builds undisturbed.
 4. The user toggles later. reviewr opens over the finished layout (→ HH-PLACEMENT-CONFIGURED).
 
 **A layout plugin opens reviewr explicitly**
@@ -125,18 +124,11 @@ The binary reviews the pane's working directory, normalized to its git top level
 | ---------------------- | ------------------------------------------------------------------------ |
 | one agent              | writes every comment into its input without submitting, then focuses it  |
 | several agents         | opens the agent picker                                                   |
-| no agent, or no answer | refuses and names the clipboard copy (→ HH-REFUSE-SAYS-CLIPBOARD)        |
+| no agent, or no answer | refuses and names the clipboard copy                                     |
 
-Candidates come from the sidebar's workspace, whatever the placement. The send asks rather than resolves. No scope inside the workspace wins over another.
+A candidate is any pane in the sidebar's workspace carrying an `agent` field, except the sidebar's own. Placement does not narrow it, and no scope inside the workspace wins over another. The send asks rather than resolves.
 
-The candidate rules, coded for citation:
-
-| code                       | Always true                                                        |
-| -------------------------- | ------------------------------------------------------------------ |
-| `HH-AGENT-PANES`           | Only panes carrying an `agent` field are candidates.               |
-| `HH-NOT-SELF`              | The sidebar's own pane is never a candidate.                       |
-| `HH-TAB-WINS`              | Turn tracking only: a sole tab agent wins over the workspace pool. |
-| `HH-REFUSE-SAYS-CLIPBOARD` | A refusal says why and points at the clipboard copy.               |
+A send that does not land says so in one short sentence and keeps every comment. It never shows herdr's own wording, which is a JSON envelope around a pane id.
 
 ### Agent picker
 
@@ -206,7 +198,7 @@ Actions:
 Send and tracking:
 
 - Browsing and the clipboard export work without the herdr CLI. Sending and turn tracking need it. Without it, `last-turn` stays empty and `uncommitted` and `branch` are unaffected.
-- Turn tracking resolves the agent under the same candidate rules (`HH-AGENT-PANES`, `HH-NOT-SELF`, `HH-TAB-WINS`), so a plugin sidebar or shell in the tab never pauses tracking.
+- Turn tracking uses the same candidates, and additionally prefers a sole agent in the sidebar's own tab over the workspace pool. A plugin sidebar or shell in the tab never pauses tracking.
 - A failed clipboard utility or `herdr pane send-text` reports the error. The comments stay in the list.
 - A turn shorter than one poll interval, or one whose start is masked by a transient `unknown` status, is missed. `last-turn` then shows the changes since the last observed turn start. It never shows lines the agent did not write.
 - A crash mid-snapshot costs at most one failed refresh. Ref updates are atomic. Leftover locks are cleared before the next snapshot and on every exit path.

@@ -46,6 +46,9 @@ impl ExportTarget for FakeTarget {
         let noun = if count == 1 { "comment" } else { "comments" };
         format!("exported {count} {noun}")
     }
+    fn failure_message(&self) -> String {
+        "fake not found".to_string()
+    }
     fn export(&self, text: &str) -> Result<()> {
         self.captured.borrow_mut().push(text.to_string());
         if self.ok { Ok(()) } else { bail!("fake export failure") }
@@ -3135,7 +3138,11 @@ fn a_poll_keeping_the_open_file_leaves_find_open_and_re_derives() {
     let snapshot = herdr_reviewr::world::build(&app.world_input()).unwrap();
     app.reconcile_world(snapshot);
 
-    assert_eq!(app.mode, Mode::Find, "a same-file poll keeps the band open (specs O6)");
+    assert_eq!(
+        app.mode,
+        Mode::Find,
+        "a same-file poll keeps the band open (overview.md Continuity)"
+    );
     assert_eq!(app.find_count().unwrap().1, before + 1, "the count re-derives from new content");
 }
 
@@ -3858,7 +3865,7 @@ mod search_overlay {
     }
 
     /// A world poll reconciles the preview but never reshapes the results or the pick —
-    /// only an edit re-queries (specs/search.md, overview.md Continuity O6).
+    /// only an edit re-queries (specs/search.md, overview.md Continuity).
     #[test]
     fn poll_never_reshapes_results_or_pick() {
         let repo = Repo::init();
@@ -4410,7 +4417,7 @@ mod search_overlay {
 
     /// The real engine, end to end: spawn the worker, run a query, and check the contract —
     /// results arrive, ignored files and `.git` never appear, and the worktree gains no
-    /// file (specs/overview.md O1).
+    /// file (specs/overview.md, the no-writes invariant).
     #[test]
     fn engine_worker_end_to_end() {
         let repo = Repo::init();
@@ -4600,6 +4607,83 @@ fn the_picker_swallows_every_key_it_does_not_bind() {
         assert_eq!(app.picker_rows, rows_before, "{code:?} rebuilt the frozen rows");
         assert_eq!(app.status, status_before, "{code:?} acted and reported from the picker");
     }
+}
+
+#[test]
+fn a_chord_never_fires_the_pickers_irreversible_send() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // `alt+enter` and `shift+enter` insert a newline in the comment editor the reviewer left
+    // moments ago (specs/input.md). Carried into the picker, that muscle memory must not send
+    // the whole review to the armed agent — only the bare key fires an irreversible action.
+    for modifiers in [KeyModifiers::ALT, KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+        let mut app = app_with_picker(&r);
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, modifiers), area, &keymap).unwrap();
+        assert_eq!(app.mode, Mode::Picker, "{modifiers:?}+enter left the picker");
+        assert_eq!(app.store.len(), 2, "{modifiers:?}+enter consumed the review");
+
+        // A chorded digit must not move the highlight either: the row it would arm is the row
+        // the next bare `enter` sends to.
+        let mut app = app_with_picker(&r);
+        handle_key(&mut app, KeyEvent::new(KeyCode::Char('3'), modifiers), area, &keymap).unwrap();
+        assert_eq!(app.picker_cursor, 0, "{modifiers:?}+3 armed a row");
+    }
+
+    // `esc` stays permissive: cancelling is always safe, and no stray modifier may trap the
+    // reviewer in a modal that swallows every other key.
+    let mut app = app_with_picker(&r);
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::SHIFT), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "a modified `esc` still cancels");
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+}
+
+#[test]
+fn the_picker_owns_its_keys_on_every_tab() {
+    use herdr_reviewr::app::Tab;
+
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // The picker is checked before the tab handlers, so no tab can eat a modal's keys. On the
+    // read-only PR tab, `q` quits and the digits switch tabs — both would act behind an open
+    // picker if the modal were checked second (specs/input.md).
+    let mut app = app_with_picker(&r);
+    app.tab = Tab::Pr;
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('q')), area, &keymap).unwrap();
+    assert!(!app.should_quit, "`q` quit the app from a picker on the PR tab");
+    assert_eq!(app.mode, Mode::Picker, "`q` left the picker");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('1')), area, &keymap).unwrap();
+    assert_eq!(app.tab, Tab::Pr, "`1` switched tabs behind the picker");
+    assert_eq!(app.picker_cursor, 0, "`1` moved the highlight, as the picker's own key");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "`esc` still cancels from the PR tab");
+}
+
+#[test]
+fn a_second_open_never_stacks_a_picker_that_one_esc_cannot_leave() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // A second open must not capture `Picker` as the mode to restore, or `esc` would land back
+    // in a picker whose rows are gone — a modal that swallows every key and whose `enter` does
+    // nothing. The frozen row set also outranks a later one (specs/herdr-host.md).
+    let mut app = app_with_picker(&r);
+    app.picker_goto(2);
+    app.open_picker(vec![choice("w8:p9", "other")], None);
+    assert_eq!(app.picker_rows, three_agents(), "the second open replaced the frozen rows");
+    assert_eq!(app.picker_cursor, 2, "the second open moved the highlight");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "one `esc` leaves the picker");
+
+    // A picker over no rows has nothing to choose and no `enter` that acts, so it never opens.
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "one");
+    app.open_picker(Vec::new(), None);
+    assert_eq!(app.mode, Mode::Normal, "an empty row set opens no modal");
 }
 
 #[test]

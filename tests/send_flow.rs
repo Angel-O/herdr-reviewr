@@ -39,7 +39,9 @@ fn write_fake_herdr(dir: &Path) -> PathBuf {
          dir=$(dirname \"$0\")\n\
          echo \"$@\" >> \"$dir/log\"\n\
          case \"$*\" in\n\
-           $(cat \"$dir/fail\" 2>/dev/null || echo __none__)*) exit 1 ;;\n\
+           $(cat \"$dir/fail\" 2>/dev/null || echo __none__)*)\n\
+             echo '{\"error\":{\"code\":\"pane_not_found\",\"message\":\"pane w8:p2 not found\"},\"id\":\"cli:request\"}' >&2\n\
+             exit 1 ;;\n\
          esac\n\
          case \"$1 $2\" in\n\
            \"agent list\") cat \"$dir/agents.json\" ;;\n\
@@ -145,7 +147,10 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     press(&mut app, KeyCode::Enter, area, &keymap);
     assert_eq!(app.mode, Mode::Normal, "the picker closes whatever the outcome");
     assert_eq!(app.store.len(), 1, "a failed send keeps every comment");
-    assert!(app.status.starts_with("agent failed:"), "status: {}", app.status);
+    // One short sentence a reviewer can read. herdr's own wording is a JSON envelope around a
+    // pane id, and the argv it came from carries the whole review in its last argument — both
+    // would fill a 40-column footer without naming anything (`specs/herdr-host.md`).
+    assert_eq!(app.status, "agent not found");
     assert_eq!(app.last_sent_pane, None, "a failed send arms nothing");
     fail_on_nothing(&fake_dir);
 
@@ -198,7 +203,7 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     assert_eq!(sends, 3, "three sends addressed the same pane: {}", log(&fake_dir));
 
     // No agent, and an enumeration herdr never answered, both refuse and name the clipboard —
-    // and neither opens a picker (HH-REFUSE-SAYS-CLIPBOARD).
+    // and neither opens a picker.
     fs::write(fake_dir.join("agents.json"), r#"{"result":{"agents":[]}}"#).unwrap();
     write_comment(&mut app, "four");
     press(&mut app, KeyCode::Char('s'), area, &keymap);

@@ -67,13 +67,22 @@ fn herdr_bin() -> String {
     env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
 }
 
+/// Run a herdr subcommand and return its stdout.
+///
+/// Nothing shows this error to a reviewer: every caller either replaces it with a sentence of its
+/// own or drops it. So the whole of it — the argv, which carries a review's text in `pane
+/// send-text`, and herdr's JSON error envelope — goes to the log and only there.
 fn herdr(args: &[&str]) -> Result<String> {
-    let out = Command::new(herdr_bin())
-        .args(args)
-        .output()
-        .with_context(|| format!("running herdr {args:?}"))?;
+    let out = match Command::new(herdr_bin()).args(args).output() {
+        Ok(out) => out,
+        Err(e) => {
+            logln!("herdr {args:?} could not run: {e}");
+            bail!("herdr could not run");
+        }
+    };
     if !out.status.success() {
-        bail!("herdr {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        logln!("herdr {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!("herdr refused");
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -96,20 +105,20 @@ fn agent_list() -> Result<Vec<AgentPane>> {
 /// What `Send` does: one workspace agent sends directly, several open the picker, and no
 /// agent refuses (`specs/herdr-host.md`). A failed enumeration refuses too, but says so rather
 /// than reporting a count herdr never gave. Either refusal is the whole status line, so both
-/// stay one short sentence naming the clipboard (HH-REFUSE-SAYS-CLIPBOARD).
+/// stay one short sentence naming the clipboard the reviewer can fall back to.
 pub fn send_target() -> Result<SendTarget> {
     let (_, ws, me) = agent_env();
     let agents = match agent_list() {
         Ok(agents) => agents,
         Err(e) => {
-            // The chain names the argv and herdr's stderr, which is diagnosis, not contract. A
-            // sidebar footer is 40 columns wide, so it goes to the log and not the status line.
+            // A refusal is the whole status line, so it says the clipboard rather than herdr's
+            // own wording. The cause is already in the log, with the argv `herdr` kept out of it.
             logln!("agent list failed: {e:#}");
             bail!("herdr did not answer — copy to the clipboard instead")
         }
     };
     // Candidacy is decided once, here: an `agent` field, our workspace, not our own pane
-    // (HH-AGENT-PANES, HH-NOT-SELF). Rows keep `agent list` order, which is herdr's own
+    // Rows keep `agent list` order, which is herdr's own
     // (`specs/herdr-host.md`).
     let picked = candidates(&agents, ws.as_deref(), me.as_deref(), |agent| &agent.workspace_id);
     match picked.len() {
@@ -234,7 +243,7 @@ pub fn resolved_agent_status() -> Result<Option<Status>> {
 }
 
 /// The sole agent in this tab, else the sole workspace agent, for turn tracking
-/// (`specs/herdr-host.md`, HH-AGENT-PANES, HH-NOT-SELF, HH-TAB-WINS). `None` when nothing
+/// (`specs/herdr-host.md`). `None` when nothing
 /// resolves — zero candidates or an ambiguous set alike pause tracking. The send never
 /// resolves this way; an ambiguous workspace opens the picker instead.
 fn pick_agent<'a>(
@@ -253,7 +262,7 @@ fn pick_agent<'a>(
 }
 
 /// The real agents whose projected ID equals `want`, ignoring our own pane `me`. Only entries
-/// carrying an `agent` field count (HH-AGENT-PANES). herdr 0.7.5 already keeps non-agent panes
+/// carrying an `agent` field count. herdr 0.7.5 already keeps non-agent panes
 /// out of `agent list`, so both filters are defensive: a plugin sidebar or a plain shell shows
 /// up in `pane list` with `agent: null` and never here (`../docs/herdr-api-notes.md`).
 fn candidates<'a>(
@@ -344,7 +353,7 @@ mod tests {
     #[test]
     fn pick_prefers_the_tab_agent_over_the_workspace() {
         let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p2", "w8:t2", "w8")];
-        // Both share workspace w8; our tab is w8:t2, so its pane wins (HH-TAB-WINS).
+        // Both share workspace w8; our tab is w8:t2, so its pane wins.
         assert_eq!(pick(&agents, Some("w8:t2"), Some("w8"), None), Some("w8:p2".to_string()));
     }
 
@@ -358,7 +367,7 @@ mod tests {
     #[test]
     fn the_reviewr_pane_excludes_itself_so_the_real_agent_resolves() {
         // Even if herdr listed our own sidebar pane (w8:p5) as an agent alongside the real
-        // one (w8:p1), excluding our pane leaves the real agent unambiguous (HH-NOT-SELF).
+        // one (w8:p1), excluding our pane leaves the real agent unambiguous.
         let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p5", "w8:t1", "w8")];
         assert_eq!(
             pick(&agents, Some("w8:t1"), Some("w8"), Some("w8:p5")),
@@ -369,7 +378,7 @@ mod tests {
     #[test]
     fn non_agent_panes_do_not_make_the_tab_ambiguous() {
         // A tab holding one real agent plus a non-agent pane (another plugin's sidebar, a
-        // plain shell) resolves to the agent, not an ambiguity refusal (HH-AGENT-PANES, #6).
+        // plain shell) resolves to the agent, not an ambiguity refusal.
         let agents = vec![agent("w3:p1", "w3:t1", "w3"), non_agent_pane("w3:p4", "w3:t1", "w3")];
         assert_eq!(
             pick(&agents, Some("w3:t1"), Some("w3"), Some("w3:p5")),
@@ -379,7 +388,7 @@ mod tests {
 
     #[test]
     fn only_non_agent_panes_resolve_no_one() {
-        // A tab and workspace holding nothing but non-agent panes resolves no one (HH-AGENT-PANES).
+        // A tab and workspace holding nothing but non-agent panes resolves no one.
         let agents =
             vec![non_agent_pane("w3:p2", "w3:t1", "w3"), non_agent_pane("w3:p4", "w3:t1", "w3")];
         assert_eq!(pick(&agents, Some("w3:t1"), Some("w3"), None), None);
@@ -473,7 +482,7 @@ mod tests {
 
     #[test]
     fn picker_rows_exclude_the_sidebar_and_every_non_agent_pane() {
-        // HH-AGENT-PANES and HH-NOT-SELF, so a shell and our own pane never become rows.
+        // A shell and our own pane are not candidates, so neither becomes a row.
         let agents = vec![
             agent("w3:p1", "w3:t1", "w3"),
             non_agent_pane("w3:p4", "w3:t1", "w3"),

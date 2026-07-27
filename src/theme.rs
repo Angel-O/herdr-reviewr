@@ -76,6 +76,15 @@ impl Palette {
         if focused { self.surface2 } else { self.surface1 }
     }
 
+    /// Lift a painted color onto a selection fill. The dim role (`overlay0`) sits one surface
+    /// step above the fill and all but vanishes on it, so it rises to `subtext0` and the
+    /// secondary parts of a selected row stay readable (`specs/theme.md`). Every other color
+    /// already reads there and passes through. Each theme names both ends, so the mapping means
+    /// the same thing in all of them.
+    pub fn on_fill(&self, color: Color) -> Color {
+        if color == self.overlay0 { self.subtext0 } else { color }
+    }
+
     /// Recede a painted color behind an open modal: halfway to `base`, so the modal owns the
     /// eye while the page behind stays recognizable (`specs/tui.md`). Non-RGB colors are the
     /// terminal's own defaults, which have no known distance to `base`; they pass through.

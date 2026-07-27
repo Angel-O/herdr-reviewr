@@ -1410,6 +1410,34 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
         app.disarm_cross();
     }
 
+    // The agent picker is strictly modal: `enter` sends, `esc` cancels, the movement bindings
+    // and the literal digits move the highlight, and every other key is inert. `q` must not
+    // quit here and `y` must not copy, or a habitual keystroke destroys or consumes the whole
+    // review while the picker is up (`specs/input.md`). It is checked before the tab handlers,
+    // like every other modal, so no tab can ever eat the modal's keys.
+    if app.mode == Mode::Picker {
+        // The send is irreversible and consumes every comment, so only the bare key fires it:
+        // `alt+enter` and `shift+enter` mean "newline, not submit" in the comment editor the
+        // reviewer was in moments ago, and that muscle memory must not send a review. The digits
+        // are literal here, whatever `tab-changes` and its siblings are bound to, so a chord
+        // carrying one must not move the highlight either. `esc` stays deliberately permissive:
+        // cancelling is always safe, and no stray modifier should trap anyone in the modal.
+        let bare = key.modifiers.is_empty();
+        match (action, key.code) {
+            (_, Esc) => app.close_picker(),
+            (_, Enter) if bare => app.picker_pick(),
+            // The digits outrank the movement bindings, so a reviewer who bound `down` to a
+            // digit still gets the row that digit names (`specs/input.md`).
+            (_, Char(c @ '1'..='9')) if bare => {
+                app.picker_goto(c as usize - '1' as usize);
+            }
+            (Some(K::Down), _) => app.picker_move(1),
+            (Some(K::Up), _) => app.picker_move(-1),
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // The read-only PR tab: navigate the snapshot and open links; authoring actions are inert.
     if app.tab == crate::app::Tab::Pr {
         match (action, key.code) {
@@ -1434,26 +1462,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             (_, PageUp) if app.focus == Focus::Files => app.pr_scroll_nav(-PAGE),
             (_, PageDown) => app.pr_scroll_read(PAGE),
             (_, PageUp) => app.pr_scroll_read(-PAGE),
-            _ => {}
-        }
-        return Ok(());
-    }
-
-    // The agent picker is strictly modal: `enter` sends, `esc` cancels, the movement bindings
-    // and the literal digits move the highlight, and every other key is inert. `q` must not
-    // quit here and `y` must not copy, or a habitual keystroke destroys or consumes the whole
-    // review while the picker is up (`specs/input.md`).
-    if app.mode == Mode::Picker {
-        match (action, key.code) {
-            (_, Esc) => app.close_picker(),
-            (_, Enter) => app.picker_pick(),
-            (Some(K::Down), _) => app.picker_move(1),
-            (Some(K::Up), _) => app.picker_move(-1),
-            // Literal digits, whatever `tab-changes` and its siblings are bound to
-            // (`specs/input.md`).
-            (_, Char(c @ '1'..='9')) => {
-                app.picker_goto(c as usize - '1' as usize);
-            }
             _ => {}
         }
         return Ok(());
@@ -1614,7 +1622,7 @@ pub fn handle_mouse(
 
     // A modal captures new mouse gestures, but a divider gesture cancelled by the key that
     // opened it still owns its remaining drag and mouse-up events.
-    if app.composing() || app.mode == Mode::List || app.mode == Mode::Picker {
+    if app.mode.is_modal() {
         match m.kind {
             // A click moves the highlight; a click on the already-highlighted row sends. The
             // highlight is armed when the picker opens, so a first click on the armed row

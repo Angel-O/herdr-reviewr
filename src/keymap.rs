@@ -43,7 +43,7 @@ pub enum Action {
 
 /// One bound key: a base character, alone or under a `ctrl`/`alt` modifier. A modifier-less
 /// `Key` is the bare character the keymap answered before chords existed
-/// (`specs/config.md` `CFG-KEY-FORM`).
+/// (`specs/config.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
     pub ctrl: bool,
@@ -171,7 +171,7 @@ pub fn default_keymap() -> &'static Keymap {
 impl Keymap {
     /// Apply `[keybindings]` overrides to the defaults. An overridden action answers exactly its
     /// configured keys; every other action keeps its defaults. A key bound twice anywhere is a
-    /// collision (`CFG-KEY-UNIQUE`, `specs/config.md`); the error detail names each action involved.
+    /// collision (`specs/config.md`); the error detail names each action involved.
     pub fn resolve(overrides: &[(Action, Vec<Key>)]) -> Result<Self, String> {
         let mut keymap = Self::default();
         for (action, keys) in overrides {

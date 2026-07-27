@@ -140,6 +140,20 @@ pub enum Mode {
     Find,
 }
 
+impl Mode {
+    /// Whether this mode is a modal hold: the reviewer is mid-gesture over the body, with keys
+    /// and a mouse of its own. A modal freezes the open diff, so the world can never move the
+    /// anchor, the scroll, or the selection out from under the gesture (`specs/overview.md`
+    /// Continuity), and it captures the mouse so no click reaches the view behind
+    /// (`specs/input.md`).
+    ///
+    /// `Search` replaces the body rather than holding a place in it, and `Find` is a band the
+    /// reviewer navigates the live diff with. Neither freezes anything, so neither is modal here.
+    pub fn is_modal(&self) -> bool {
+        matches!(self, Mode::Composing { .. } | Mode::List | Mode::Picker)
+    }
+}
+
 /// The search screen's mode: which result set the list shows (specs/search.md).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SearchMode {
@@ -975,11 +989,11 @@ impl App {
             .min(self.file_rows.len().saturating_sub(1));
         // A poll preserves the file-list wheel scroll — it does not reveal the cursor.
         // Explicit actions (navigation, a scope switch) request their own reveal.
-        // While a modal is open — composing a comment, the comments-list overlay, or the agent
-        // picker — the open diff is frozen, so a poll can't shift the anchor beneath the writer,
-        // reset the scroll/selection under the overlay, or move the reviewer's place while they
-        // choose an agent (specs/herdr-host.md). The file list still updates above (specs/tui.md).
-        if !self.composing() && self.mode != Mode::List && self.mode != Mode::Picker {
+        // While a modal is open the diff below it is frozen, so a poll can't shift the anchor
+        // beneath the writer, reset the scroll and selection under the overlay, or move the
+        // reviewer's place while they choose an agent (`Mode::is_modal`, overview.md Continuity).
+        // The file list still updates above (specs/tui.md).
+        if !self.mode.is_modal() {
             // A poll keeps the reader on the same file; only a different shown file resets
             // the diff view to the top. It also drops an armed crossing, which was armed at the
             // edge of a file that is no longer the one on screen (specs/input.md).
@@ -3323,7 +3337,7 @@ impl App {
             Ok(SendTarget::One(agent)) => self.export_to_agent(&agent),
             Ok(SendTarget::Many(rows)) => self.open_picker(rows, herdr::opened_beside().as_deref()),
             // The refusal is already a whole sentence naming the cause and the clipboard, so a
-            // prefix would only spend the width the footer needs to show it (HH-REFUSE-SAYS-CLIPBOARD).
+            // prefix would only spend the width the footer needs to show it.
             Err(e) => self.status = e.to_string(),
         }
     }
@@ -3333,6 +3347,13 @@ impl App {
     /// opened next to, else the first row (`specs/herdr-host.md`). `beside` is a parameter so
     /// the environment is read once at the send boundary, never ambiently.
     pub fn open_picker(&mut self, rows: Vec<AgentChoice>, beside: Option<&str>) {
+        // A picker with no rows has nothing to choose and no `enter` that acts, and a second open
+        // over a live one would capture `Picker` as the mode to restore — either way a modal that
+        // swallows every key and that one `esc` cannot leave. The frozen row set also outranks a
+        // later one: it is what the reviewer is reading (`specs/herdr-host.md`).
+        if rows.is_empty() || self.mode == Mode::Picker {
+            return;
+        }
         self.picker_cursor = armed_row(&rows, self.last_sent_pane.as_deref(), beside);
         self.picker_rows = rows;
         self.picker_over = self.mode.clone();
@@ -3403,8 +3424,8 @@ impl App {
                 true
             }
             Err(e) => {
-                self.status = format!("{} failed: {e}", target.label());
-                logln!("export ERR: {e}");
+                self.status = target.failure_message();
+                logln!("export ERR: {e:#}");
                 false
             }
         };

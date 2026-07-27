@@ -53,6 +53,12 @@ herdr runs plugin commands with a minimal `PATH`; prepend common bin dirs for `j
 
 - **Action context** (`HERDR_PLUGIN_CONTEXT_JSON`): `workspace_id`, `tab_id`, `focused_pane_id`,
   `focused_pane_cwd`, `worktree:{repo_root, checkout_path, ...}`.
+- **A plugin pane inherits the context of the open that created it** (verified live, 0.7.5: nine
+  running sidebars, each carrying `HERDR_PLUGIN_CONTEXT_JSON` with `invocation_source: "api"` and
+  `correlation_id: "plugin-pane"`). `focused_pane_id` names the pane the sidebar was opened beside,
+  never the sidebar's own `HERDR_PANE_ID`, which is what level 2 of the picker's arming ladder
+  reads (`../specs/herdr-host.md`). A sidebar opened beside a non-agent pane carries that pane's
+  id and no `focused_pane_agent`, so the ladder falls through to the first row.
 - **`plugin action invoke` resolves context from the focused workspace**, wherever it is run — the
   calling pane's `HERDR_*` env is ignored, and `invoke <action_id> [--plugin ID]` has no workspace
   selector (verified live, 0.7.1: invoked from pane `w1X:p1`, context arrived for focused `w1B`).
@@ -80,7 +86,7 @@ workspace. No sample held two agents in one tab, so the order inside a tab is un
   several open the picker (`../specs/herdr-host.md`). Turn tracking still resolves `HERDR_TAB_ID`
   first, then the workspace.
 - 0.7.5 lists only real agent panes. A plugin sidebar or a plain shell appears in `pane list`
-  with `agent: null` and never in `agent list`, so `HH-NOT-SELF` is defensive rather than load-bearing.
+  with `agent: null` and never in `agent list`, so excluding our own pane is defensive.
 - `name`, `display_agent`, and `state_labels` are omitted entirely until something sets them.
   `herdr agent rename <pane> <name>` makes `name` appear; `--clear` leaves it present and null.
   Names are `[a-z0-9_-]{1,32}` and must start with a lowercase letter, so they carry no spaces.
@@ -93,6 +99,17 @@ ordinal. The picker joins `label` on `tab_id`, best effort.
 herdr pane send-text <agent_pane> "<literal text>"   # writes input, no Enter
 herdr agent focus    <agent_pane>                    # focus so the reviewer submits
 ```
+
+**Every failing call writes a JSON envelope to stderr, never a plain sentence** (verified live,
+0.7.5, across `pane send-text`, `tab list`, and `agent focus`):
+
+```
+{"error":{"code":"pane_not_found","message":"pane w8:p2 not found"},"id":"cli:request"}
+```
+
+No part of this is fit for a 40-column status line, `message` included: it names a pane id the
+reviewer never saw. reviewr logs the whole payload and shows a sentence of its own
+(`../specs/herdr-host.md`).
 
 - `pane send-text` writes the literal bytes to the pane without Enter, unchanged since 0.7.0.
 - herdr 0.7.5 removed `agent send` (replaced by the logical-key `agent send-keys`). On 0.7.0 both

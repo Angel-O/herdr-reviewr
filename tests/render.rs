@@ -492,6 +492,29 @@ fn a_narrow_row_keeps_send_and_the_more_hint_by_shedding_the_primary_label() {
 }
 
 #[test]
+fn a_status_too_long_to_paint_never_costs_the_row_the_actions_that_fit() {
+    let mut app = edited_app();
+    on_changed_line(&mut app);
+    app.start_comment();
+    app.input_push('n');
+    app.submit_comment(); // a written comment adds `s send 1` to row 1
+
+    // A herdr failure is the longest line the status ever carries. Where the row has no room to
+    // paint any of it, the status must cost nothing: the row falls back to exactly what it shows
+    // with no status at all. Reserving room for a message that then drops would spend the width
+    // twice and paint neither (`specs/input.md`).
+    for w in 14..=140u16 {
+        app.status = "z".repeat(60);
+        let with = footer_line(&render_at(&app, w));
+        app.status = String::new();
+        let without = footer_line(&render_at(&app, w));
+        if !with.contains('z') {
+            assert_eq!(with, without, "width {w} paid for a status it never painted");
+        }
+    }
+}
+
+#[test]
 fn the_footer_shows_the_sends_outcome_at_a_sidebar_width_by_yielding_the_cursor_actions() {
     let mut app = edited_app();
     on_changed_line(&mut app);
@@ -501,7 +524,7 @@ fn the_footer_shows_the_sends_outcome_at_a_sidebar_width_by_yielding_the_cursor_
 
     // The status is the only answer `s` gives, and a reviewr sidebar is around 40 columns wide, so
     // the cursor's actions yield to it: the `?` panel repeats every action and nothing repeats the
-    // status (`specs/input.md`, HH-REFUSE-SAYS-CLIPBOARD).
+    // status (`specs/input.md`).
     app.status = "no agent here — copy to the clipboard instead".to_string();
     let narrow = footer_line(&render_at(&app, 40));
     assert!(narrow.contains("no agent here"), "the refusal shows at 40 columns:\n{narrow}");
@@ -2568,6 +2591,38 @@ fn an_open_picker_dims_the_view_behind_it_but_never_the_footer() {
     let bright =
         (0..dimmed.area.width).any(|x| dimmed.cell((x, footer_y)).is_some_and(|c| c.fg == PEACH));
     assert!(bright, "the footer's primary key hint stays at full brightness");
+}
+
+#[test]
+fn neither_popup_reaches_the_footer_that_advertises_its_keys() {
+    let mut app = edited_app();
+    for text in ["one", "two", "three"] {
+        write_comment(&mut app, text);
+    }
+    let rows = vec![
+        agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
+        agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
+    ];
+
+    // Both popups place through one rule, `body_popup`, so at every pane size the footer keeps
+    // naming the keys the popup is listening for — it is the only surface that does
+    // (`specs/tui.md`).
+    for h in 8..=30u16 {
+        app.open_list();
+        let listed = dump(&render_size(&app, 44, h));
+        app.close_list();
+        app.open_picker(rows.clone(), None);
+        let picked = dump(&render_size(&app, 44, h));
+        app.close_picker();
+
+        for (name, out) in [("comments list", listed), ("agent picker", picked)] {
+            let footer = out.lines().last().unwrap_or_default().to_string();
+            assert!(
+                footer.contains("esc"),
+                "the {name} popup covered the footer at height {h}:\n{out}"
+            );
+        }
+    }
 }
 
 #[test]

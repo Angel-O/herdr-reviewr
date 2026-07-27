@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-10
-Last edited: 2026-07-23
+Last edited: 2026-07-27
 ---
 
 # Configuration
@@ -48,14 +48,13 @@ find    = ["ctrl+f"]
 
 The cross-entrypoint invariants, coded for citation:
 
-| code                   | Always true                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `CFG-MISSING-DEFAULTS` | A missing config file uses every default.                                      |
-| `CFG-WHOLE-FILE`       | An unknown key or an invalid value makes the whole file invalid.               |
-| `CFG-BLOCKED-INERT`    | An entrypoint that observes an invalid file performs none of its normal work.  |
-| `CFG-ONE-SNAPSHOT`     | One operation or refresh uses one validated config snapshot.                   |
+| code                | Always true                                                                    |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `CFG-WHOLE-FILE`    | An unknown key or an invalid value makes the whole file invalid.               |
+| `CFG-BLOCKED-INERT` | An entrypoint that observes an invalid file performs none of its normal work.  |
+| `CFG-ONE-SNAPSHOT`  | One operation or refresh uses one validated config snapshot.                   |
 
-An omitted key uses that key's default. An invalid file applies none of its keys. Every sidebar frame, manual action, and plugin event validates the whole file first.
+A missing file uses every default, and so does an omitted key. An invalid file applies none of its keys. Every sidebar frame, manual action, and plugin event validates the whole file first.
 
 Each `base_branches` entry canonicalizes to one bare branch name: a leading `refs/heads/`, `refs/remotes/origin/`, or `origin/` prefix is stripped. Duplicate entries collapse to the first occurrence. Every consumer resolves an entry through `refs/remotes/origin/<name>`, then `refs/heads/<name>`. The `--base` flag resolves verbatim first, then as a canonical entry. `origin/HEAD` backstops an unresolvable list (`review-model.md`).
 
@@ -87,20 +86,15 @@ Config writers must build a complete file beside `config.toml`, then replace it 
 
 ### Keybindings
 
-`[keybindings]` rebinds the action shortcuts. The resolved keymap is the default keymap with each bound action's keys replaced by its binding. A key is a bare character or a `ctrl+`/`alt+` chord (`CFG-KEY-FORM`), so an action reachable only by a chord, like `find`, rebinds like any other (`input.md`).
+`[keybindings]` rebinds the action shortcuts. The resolved keymap is the default keymap with each bound action's keys replaced by its binding. A key is one printable, non-whitespace codepoint, alone or with a `ctrl+`/`alt+` prefix. An action reachable only by a chord, like `find`, rebinds like any other (`input.md`).
 
 `list-wider` and `list-narrower` remain accepted aliases for `navigator-grow` and `navigator-shrink`. A config that names an action and its alias is invalid as a duplicate action. Resolved config output uses the canonical names.
 
-An existing custom binding does not displace a newly added default. If an upgrade creates a collision in the resolved keymap, the config is invalid under `CFG-KEY-UNIQUE`. The error names both actions and the shared character.
+A key appears at most once across the resolved keymap's lists. An existing custom binding does not displace a newly added default. If an upgrade creates a collision, the config is invalid and the error names both actions and the shared character.
 
 The sidebar validates before drawing each frame. That frame and the next input event use the resulting config and layout snapshot. A file change after drawing affects the following frame.
 
-| code             | Always true                                                                              |
-| ---------------- | ---------------------------------------------------------------------------------------- |
-| `CFG-KEY-FORM`   | A key is one printable, non-whitespace codepoint, alone or with a `ctrl+`/`alt+` prefix. |
-| `CFG-KEY-UNIQUE` | A key appears at most once across the resolved keymap's lists.                           |
-
-A binding never displaces a fixed key (`input.md`). An unknown action name is an unknown key (→ CFG-WHOLE-FILE). A `CFG-KEY-FORM` or `CFG-KEY-UNIQUE` violation is an invalid value (→ CFG-WHOLE-FILE). A collision error names each action involved.
+A binding never displaces a fixed key (`input.md`). An unknown action name is an unknown key. A malformed key and a duplicate key are both invalid values (→ CFG-WHOLE-FILE).
 
 A blocked sidebar answers only the default `quit` key.
 
@@ -127,7 +121,7 @@ A blocked sidebar answers only the default `quit` key.
 
 ## Failure semantics
 
-- A missing file is valid (→ CFG-MISSING-DEFAULTS). Any other read failure is an invalid config.
+- A missing file is valid and uses every default. Any other read failure is an invalid config.
 - An invalid first read blocks the plugin exactly like a later invalid read.
 - A valid later read clears the error and rebuilds the sidebar from fresh inputs without a plugin reinstall or restart.
 - A valid intermediate file is indistinguishable from an intended config. Non-atomic writers can apply it.

@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Selected rows keep their dim parts readable.** A row's secondary text used to all but vanish
+  under the selection fill. It now brightens with the fill, in every list that has one: the file
+  list's indent, a search hit's line number, and a picker row's state and tab.
+
+### Fixed
+- **A failed send says something you can read.** When `herdr` refused a send, the status filled
+  with the command reviewr had run, which carries your whole review as one argument. A 40-column
+  footer answered with a fragment of your own comments. It now says `agent not found`. herdr's own
+  wording is a JSON envelope around a pane id, so that goes to the log and never to you.
+- **A chord never sends by accident.** `Alt+Enter` and `Shift+Enter` mean "newline, not submit" in
+  the comment editor, and they used to send the whole review from the agent picker. Only the
+  unmodified `enter` sends now. Modified digits no longer move the highlight either.
+- **The footer never spends its width twice.** On a pane too narrow to show a long status, the
+  footer used to drop the cursor's actions to make room for it and then drop the status too,
+  leaving the row with neither. A status that cannot be shown now costs the row nothing.
+- **The picker keeps its keys on the PR tab.** A picker opened there would have handed `q` and the
+  digits to the tab behind it.
+
 ## [0.25.0] — 2026-07-26
 
 ### Added

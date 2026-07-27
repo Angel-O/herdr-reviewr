@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-07-26
+Last edited: 2026-07-27
 ---
 
 # Input
@@ -218,8 +218,11 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 | `enter`                 | send every comment to the highlighted agent |
 | `esc`                   | cancel, keeping every comment               |
 
+Only the unmodified `enter` sends. `Alt+Enter` and `Shift+Enter` insert a newline in the comment editor, so carrying that chord into the picker sends nothing rather than handing the whole review to the armed agent.
+
 - A click moves the highlight to the clicked row. A click on the highlighted row sends. The highlight is armed when the picker opens, so a first click on the armed row sends immediately. Every other gesture is inert, and none reaches the view behind.
-- The digits are literal here, whatever `tab-changes` and its siblings are bound to.
+- The digits are literal here, whatever `tab-changes` and its siblings are bound to. A modified digit moves nothing.
+- `esc` cancels with or without a modifier, so no keystroke traps the reviewer in the picker.
 - A picker taller than the pane scrolls with the highlight.
 - `esc` returns to the view the send was issued from, the comments list and the find band included.
 

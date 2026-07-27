@@ -65,17 +65,20 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_diff_view(frame, app, p.diff);
         render_file_list(frame, app, p.files);
     }
-    // One footer band on every tab, drawn after the per-tab base so it sits on both layouts;
-    // then the comments-list modal on top when it is open.
+    // One footer band on every tab, drawn after the per-tab base so it sits on both layouts.
     render_footer(frame, app, p.status);
 
-    if app.mode == Mode::List {
+    // A popup paints last, over the page it scrims. One match decides both the scrim and what
+    // paints, so a mode can never scrim the page and then draw nothing. Both popups place through
+    // `body_popup`, so the footer just drawn stays uncovered and keeps advertising their keys.
+    let popup: Option<fn(&mut Frame, &App, Rect)> = match app.mode {
+        Mode::List => Some(render_comments_list),
+        Mode::Picker => Some(render_agent_picker),
+        Mode::Normal | Mode::Composing { .. } | Mode::Search | Mode::Find => None,
+    };
+    if let Some(render_popup) = popup {
         scrim_behind(frame, app, area);
-        render_comments_list(frame, app, area);
-    }
-    if app.mode == Mode::Picker {
-        scrim_behind(frame, app, area);
-        render_agent_picker(frame, app, area);
+        render_popup(frame, app, area);
     }
 }
 
@@ -1582,12 +1585,6 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
     let send_w = send.map_or(0, |a| entry_width(app, a));
     let tail = send_w + reserve;
 
-    // The status answers the keypress the reviewer just made and fades on its own clock, so it
-    // outranks the cursor's actions: the `?` panel repeats every action, and nothing repeats the
-    // status (`specs/input.md`). It reserves its room here, before the actions pack into what is
-    // left, so a 40-column sidebar still shows the send's outcome (HH-REFUSE-SAYS-CLIPBOARD).
-    let status_w = if app.status.is_empty() { 0 } else { STATUS_FRAME + app.status.width() };
-
     // While the panel is open, row 1 joins the labeled grid: a dim `do` gutter, its content aligned
     // under the `go`/`move` keys. Collapsed (and in a modal) it stays flush — the plain action bar.
     // The grid engages only when the gutter still leaves room for the primary's key, `send`, and the
@@ -1640,6 +1637,25 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
             spans.push(Span::styled(key, key_style));
         }
     }
+
+    // The status answers the keypress the reviewer just made and fades on its own clock, so it
+    // outranks the cursor's actions: the `?` panel repeats every action, and nothing repeats the
+    // status (`specs/input.md`). It reserves its room here, before the actions pack into what is
+    // left, so a 40-column sidebar still shows the send's outcome.
+    //
+    // The reservation is what the status can actually take, never what it wants: capped at the
+    // room that exists, and nothing at all when even that is below `STATUS_MIN`. Reserving the
+    // untruncated width would evict every action for a message the paint below then drops,
+    // leaving a row with neither. The worst-case tail is the same either way, since a trimmed
+    // modal footer spends on its `…` exactly what a `Normal` one spends on its `?`.
+    let status_tail =
+        send_w + if do_acts.is_empty() { reserve } else { reserve.max(MORE_ELLIPSIS) };
+    let free = w.saturating_sub(used + status_tail);
+    let status_w = if app.status.is_empty() || free < STATUS_FRAME + STATUS_MIN {
+        0
+    } else {
+        (STATUS_FRAME + app.status.width()).min(free)
+    };
 
     // The cursor's actions, packed until one would crowd `send` and the `?` off the line; the rest
     // spill to the `do` band.
@@ -1737,9 +1753,17 @@ fn render_band(
     lines
 }
 
+/// The comments list is a browse surface, not a menu: its box is a fraction of the body rather
+/// than its content's size, so the geometry holds still while comments come and go.
+const LIST_POPUP_W_PCT: u16 = 80;
+const LIST_POPUP_H_PCT: u16 = 70;
+
 fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     let p = app.palette();
-    let popup = centered(area, 80, 60);
+    let body = panes(area, app).body;
+    let w = body.width * LIST_POPUP_W_PCT / 100;
+    let h = body.height * LIST_POPUP_H_PCT / 100;
+    let popup = body_popup(area, app, w, h);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1771,10 +1795,23 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(List::new(items), inner);
 }
 
-/// The picker's popup: centered in the body band, and sized to its rows rather than to a
-/// fixed fraction. Three short rows in an 80%-tall box would be mostly empty, and a popup
-/// clamped to the body can never cover the footer, the one surface advertising its keys
-/// (`specs/herdr-host.md`, `specs/tui.md`).
+/// A popup box of `w` × `h`, centered in the body band and clamped to it. Both popups place
+/// through here, so neither can ever reach the footer — the one surface advertising the keys
+/// the popup is listening for (`specs/tui.md`).
+fn body_popup(area: Rect, app: &App, w: u16, h: u16) -> Rect {
+    let body = panes(area, app).body;
+    let w = w.min(body.width);
+    let h = h.min(body.height);
+    Rect {
+        x: body.x + body.width.saturating_sub(w) / 2,
+        y: body.y + body.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// The picker is a menu, so its box is sized to its rows rather than to a fraction of the body.
+/// Three short rows in an 80%-tall box would be mostly empty (`specs/herdr-host.md`).
 const PICKER_MIN_WIDTH: usize = 34;
 
 fn picker_popup(area: Rect, app: &App) -> Rect {
@@ -1794,9 +1831,7 @@ fn picker_popup(area: Rect, app: &App) -> Rect {
     // the floor, so a picker of short names still reads as a deliberate dialog.
     let w = (widest + 3).max(title).max(PICKER_MIN_WIDTH).min(body.width as usize) as u16;
     let h = (app.picker_rows.len() + 2).min(body.height as usize) as u16;
-    let x = body.x + (body.width.saturating_sub(w)) / 2;
-    let y = body.y + (body.height.saturating_sub(h)) / 2;
-    Rect { x, y, width: w, height: h }
+    body_popup(area, app, w, h)
 }
 
 /// The popup's row region, from the same `Block` shape the renderer draws, so the hit test
@@ -2506,10 +2541,11 @@ fn selectable_row(
             if s.style.bg.is_none() {
                 s.style = s.style.bg(bg);
             }
-            // `overlay0` sits one surface step above the fill and all but vanishes on it;
-            // dim text lifts to `subtext0` so a selected row keeps its secondary parts.
-            if s.style.fg == Some(p.overlay0) {
-                s.style = s.style.fg(p.subtext0);
+            // Dim text lifts, so a selected row keeps its secondary parts: the file list's
+            // indent, the search hit's line number, the picker row's state and tab trail.
+            // The theme owns which color that is (`specs/theme.md`).
+            if let Some(fg) = s.style.fg {
+                s.style = s.style.fg(p.on_fill(fg));
             }
             s.style = s.style.add_modifier(Modifier::BOLD);
         }
@@ -3080,20 +3116,4 @@ fn inner_rect(outer: Rect) -> Rect {
         width: outer.width.saturating_sub(2),
         height: outer.height.saturating_sub(2),
     }
-}
-
-/// A `Rect` centered in `area` at `pct_x` × `pct_y` percent of its size.
-fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
-    let v = Layout::vertical([
-        Constraint::Percentage((100 - pct_y) / 2),
-        Constraint::Percentage(pct_y),
-        Constraint::Percentage((100 - pct_y) / 2),
-    ])
-    .split(area);
-    Layout::horizontal([
-        Constraint::Percentage((100 - pct_x) / 2),
-        Constraint::Percentage(pct_x),
-        Constraint::Percentage((100 - pct_x) / 2),
-    ])
-    .split(v[1])[1]
 }
