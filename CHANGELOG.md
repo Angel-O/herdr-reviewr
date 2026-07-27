@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.1] — 2026-07-27
+
 ### Changed
 - **Selected rows keep their dim parts readable.** A row's secondary text used to all but vanish
   under the selection fill. It now brightens with the fill, in every list that has one: the file
