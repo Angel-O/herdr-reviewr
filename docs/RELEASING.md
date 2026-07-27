@@ -78,18 +78,16 @@ end-to-end test: it exercises the exact `herdr plugin install` path a user hits.
    ```
 
 2. **Relaunch the sidebar** so the open pane runs the new binary instead of the old process.
-   The `close` and `open` actions own the pane lifecycle — there is no state file to sync:
+   A running pane keeps its old binary image until it closes. Closing is safe to script:
 
    ```bash
    herdr plugin action invoke close --plugin persiyanov.reviewr   # closes every reviewr pane
-   herdr plugin action invoke open  --plugin persiyanov.reviewr   # opens the new binary
    ```
 
-**Gotchas**
-
-- The actions act on the focused workspace. Focus the workspace you want relaunched first.
-- Closing then immediately reopening can briefly leave two `reviewr` panes (async lag) — a
-  single `close` sweeps them all.
+   **Reopen with your own toggle keybinding, never a scripted `open`.** The `open` and `toggle`
+   actions act on the focused workspace and ignore `HERDR_WORKSPACE_ID`, so a scripted reopen
+   stacks sidebars into whatever space you happen to be looking at rather than the ones you
+   closed (`../AGENTS.md`).
 
 ## Notes
 
