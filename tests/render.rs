@@ -1113,15 +1113,43 @@ fn open_list_renders_the_comments_overlay() {
 }
 
 #[test]
-fn last_turn_without_a_baseline_renders_the_waiting_state() {
+fn last_turn_without_an_agent_says_the_worktree_is_empty() {
+    // `specs/herdr-host.md` owns when membership counts as observed; `specs/tui.md` owns the
+    // wording. Only a sample that found no member may say the worktree is empty.
+    let r = Repo::init();
+    r.write("a.rs", "a\n");
+    r.commit_all("init");
+    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
+    app.reload().unwrap();
+    app.sync_agents_present(Some(false));
+    let out = render(&app);
+    assert!(out.contains("[last turn]"), "the scope chip reads last turn");
+    assert!(out.contains("no agent works here"), "the empty-worktree state shows");
+}
+
+#[test]
+fn last_turn_with_an_agent_and_no_turn_yet_waits_for_the_first() {
+    let r = Repo::init();
+    r.write("a.rs", "a\n");
+    r.commit_all("init");
+    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
+    app.reload().unwrap();
+    app.sync_agents_present(Some(true));
+    let out = render(&app);
+    assert!(out.contains("waiting for the first turn"), "the pre-turn state shows");
+}
+
+#[test]
+fn last_turn_before_the_first_sample_waits_rather_than_asserting_emptiness() {
+    // The pre-poll frame has observed nothing, so it may wait but not claim the worktree
+    // is empty — stale is allowed, wrong is not (`specs/overview.md` Continuity).
     let r = Repo::init();
     r.write("a.rs", "a\n");
     r.commit_all("init");
     let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
     app.reload().unwrap();
     let out = render(&app);
-    assert!(out.contains("[last turn]"), "the scope chip reads last turn");
-    assert!(out.contains("waiting for the agent's next turn"), "the cold-start empty state shows");
+    assert!(out.contains("waiting for the first turn"), "the unknown state waits");
 }
 
 #[test]

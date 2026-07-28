@@ -563,6 +563,13 @@ pub struct App {
     /// The worker-owned turn baseline, mirrored from completions so the sync `last-turn`
     /// paths (the diff's old side, the scope-switch rebuild) read it without a round-trip.
     turn_baseline: Option<String>,
+    /// Whether any agent is in this worktree — the one home for the answer, held here
+    /// because this is what paints it. `None` until a sample observes it, so a frame that
+    /// has seen nothing waits instead of asserting an emptiness nobody looked for: stale is
+    /// allowed, wrong is not (`specs/overview.md` Continuity). Only a sample that observed the
+    /// whole worktree moves it — herdr answered and git resolved every member's directory — so
+    /// `Some(false)` always means someone looked and found no member.
+    agents_present: Option<bool>,
 }
 
 /// One painted link region: `x_start..x_end` on screen row `y`, in absolute cells.
@@ -676,6 +683,7 @@ impl App {
             cache: DiffCache::new(),
             markdown_cache: std::cell::RefCell::new(crate::markdown::RenderCache::default()),
             turn_baseline,
+            agents_present: None,
         }
     }
 
@@ -1210,15 +1218,43 @@ impl App {
     }
 
     /// Whether the `last-turn` scope is active but no baseline has been captured yet — the
-    /// cold-start (or no-herdr) state the UI paints as `waiting for the agent's next turn`.
+    /// cold-start state the UI paints as [`Self::turn_wait_message`] (`specs/tui.md`).
     pub fn awaiting_turn(&self) -> bool {
         self.scope == Scope::LastTurn && self.turn_baseline.is_none()
+    }
+
+    /// The one message both panes paint for an [`Self::awaiting_turn`] frame, chosen here
+    /// so the file list and the diff view cannot disagree (`specs/tui.md`). An empty
+    /// worktree will never produce a turn, so saying so beats waiting — but only a sample
+    /// that found no member says it, since the pre-poll frame may only wait: stale is
+    /// allowed, wrong is not (`specs/overview.md` Continuity).
+    pub fn turn_wait_message(&self) -> &'static str {
+        match self.agents_present {
+            Some(false) => "no agent works here",
+            _ => "waiting for the first turn",
+        }
+    }
+
+    /// The membership mirror itself: `None` until a sample observes it. The UI reads only
+    /// [`Self::turn_wait_message`], which paints `None` and `Some(true)` alike; this exposes the
+    /// held-versus-empty distinction underneath, which the turn-tracking tests assert directly.
+    pub fn agents_present(&self) -> Option<bool> {
+        self.agents_present
     }
 
     /// Follow the worker's baseline. Every completion carries the authoritative value, so
     /// the mirror syncs even when the completion's snapshot is superseded or discarded.
     pub fn sync_turn_baseline(&mut self, baseline: Option<String>) {
         self.turn_baseline = baseline;
+    }
+
+    /// Follow what a sample saw. `None` is a sample that could not observe the whole worktree —
+    /// herdr was unreachable, or a member's directory would not resolve — and so saw nothing,
+    /// which holds the previous answer rather than replacing it. Like
+    /// [`Self::sync_turn_baseline`], this lands even from a superseded completion — the
+    /// worker is serial, so no completion can carry membership newer than a later one.
+    pub fn sync_agents_present(&mut self, present: Option<bool>) {
+        self.agents_present = present.or(self.agents_present);
     }
 
     /// Queue a world refresh for the event loop to dispatch after the frame paints.

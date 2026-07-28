@@ -4,13 +4,14 @@
 mod common;
 
 use std::cell::RefCell;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use common::{Repo, app_on, enter_tab, typed};
 use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode};
 use herdr_reviewr::config::NavigatorPosition;
 use herdr_reviewr::export::ExportTarget;
-use herdr_reviewr::herdr::AgentChoice;
+use herdr_reviewr::herdr::{AgentChoice, AgentSample};
 use herdr_reviewr::keymap::{Action, Key, Keymap};
 use herdr_reviewr::model::{Scope, Side};
 use herdr_reviewr::turn::Status;
@@ -2045,11 +2046,45 @@ fn jump_moves_the_cursor_onto_a_commented_line() {
 
 // --- last-turn scope -----------------------------------------------------------
 
-/// Drive one status sample on the worker-owned turn host and mirror its baseline into the
-/// app, exactly as a world completion landing would (specs/herdr-host.md).
-fn observe_turn(app: &mut App, host: &mut herdr_reviewr::world::TurnHost, status: Option<Status>) {
-    host.observe(status);
+/// One agent working in `cwd`, as `herdr agent list` would report it.
+fn agent_in(cwd: &Path, status: Status) -> AgentSample {
+    AgentSample { cwd: Some(cwd.to_string_lossy().into_owned()), status }
+}
+
+/// Drive one enumeration on the worker-owned turn host and mirror its baseline and
+/// membership into the app, exactly as a world completion landing would
+/// (specs/herdr-host.md). `None` is a failed enumeration.
+fn observe_agents(
+    app: &mut App,
+    host: &mut herdr_reviewr::world::TurnHost,
+    samples: Option<&[AgentSample]>,
+) {
+    let report = host.observe_agents(samples);
     app.sync_turn_baseline(host.baseline().map(str::to_string));
+    app.sync_agents_present(report.agents_present);
+}
+
+/// An app and the worker's turn host on one repo, built the way `run` builds them: one
+/// resolved top level handed to both (`src/lib.rs` `repo_root`). The two derive the baseline
+/// ref key independently, and membership compares resolved top levels, so a test that opened
+/// them on the raw temp path would key them apart — on macOS a temp dir resolves `/var` to
+/// `/private/var`, and no agent cwd would ever match.
+fn turn_setup(r: &Repo) -> (App, herdr_reviewr::world::TurnHost) {
+    let root = herdr_reviewr::git::toplevel(r.path()).expect("a repo");
+    (App::new(root.clone(), Scope::LastTurn, None), herdr_reviewr::world::TurnHost::open(root))
+}
+
+/// The single-agent case the older tests drive: one agent at the worktree root.
+fn observe_turn(
+    app: &mut App,
+    host: &mut herdr_reviewr::world::TurnHost,
+    repo: &Path,
+    status: Option<Status>,
+) {
+    match status {
+        Some(status) => observe_agents(app, host, Some(&[agent_in(repo, status)])),
+        None => observe_agents(app, host, None),
+    }
 }
 
 #[test]
@@ -2068,12 +2103,11 @@ fn last_turn_shows_a_change_producing_turn() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // turn start: candidate = "one"
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // turn start: candidate = "one"
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // first change promotes the baseline
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // first change promotes the baseline
     app.reload().unwrap();
     assert!(!app.awaiting_turn(), "the baseline is now set");
     assert!(app.entries.iter().any(|f| f.path == "a.rs"), "the turn's edit shows");
@@ -2084,17 +2118,16 @@ fn a_question_only_turn_keeps_the_previous_turns_diff() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
+    let (mut app, mut host) = turn_setup(&r);
     // Turn A edits a file.
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     // Turn B is a question — no file change.
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working));
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
     app.reload().unwrap();
     assert!(
         app.entries.iter().any(|f| f.path == "a.rs"),
@@ -2107,15 +2140,14 @@ fn a_permission_pause_stays_one_turn() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // turn start: candidate = "one"
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // turn start: candidate = "one"
     r.write("a.rs", "one\nbefore\n"); // edit before the prompt
-    observe_turn(&mut app, &mut host, Some(Status::Blocked)); // permission prompt promotes baseline = "one"
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // resume — must NOT re-baseline
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Blocked)); // permission prompt promotes baseline = "one"
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // resume — must NOT re-baseline
     r.write("a.rs", "one\nbefore\nafter\n"); // edit after the prompt
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     app.reload().unwrap();
     let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
     let annotation = a.annotation.as_ref().expect("a changed file is annotated");
@@ -2128,15 +2160,15 @@ fn the_baseline_survives_a_restart() {
     r.write("a.rs", "one\n");
     r.commit_all("init");
     {
-        let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-        let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-        observe_turn(&mut app, &mut host, Some(Status::Idle));
-        observe_turn(&mut app, &mut host, Some(Status::Working));
+        let (mut app, mut host) = turn_setup(&r);
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
         r.write("a.rs", "one\ntwo\n");
-        observe_turn(&mut app, &mut host, Some(Status::Working)); // promotes and persists the ref
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // promotes and persists the ref
     }
-    // A fresh App — a sidebar restart — resumes the persisted baseline.
-    let mut restarted = App::new(r.path_buf(), Scope::LastTurn, None);
+    // A fresh App — a sidebar restart — resumes the persisted baseline. It reads the ref by
+    // the same key the host wrote it under, which is why both resolve the repo the one way.
+    let (mut restarted, _) = turn_setup(&r);
     restarted.reload().unwrap();
     assert!(!restarted.awaiting_turn(), "baseline resumed from the private ref");
     assert!(restarted.entries.iter().any(|f| f.path == "a.rs"), "the turn's edit still shows");
@@ -2147,13 +2179,211 @@ fn no_agent_status_pauses_tracking() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, None); // no herdr / no resolvable agent
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), None); // no herdr / no resolvable agent
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, None);
+    observe_turn(&mut app, &mut host, r.path(), None);
     app.reload().unwrap();
     assert!(app.awaiting_turn(), "without a status signal the baseline never forms");
+}
+
+#[test]
+fn two_agents_in_one_worktree_produce_one_turn() {
+    // HH-TURN-PER-WORKTREE: the turn is the worktree's, so a second agent joining an open
+    // turn never starts another one or re-baselines the first agent's work out of the diff.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Idle)]));
+    // Agent A starts. Candidate = "one".
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Idle)]),
+    );
+    r.write("a.rs", "one\ntwo\n");
+    // Agent B joins mid-turn. A restart here would drop the "two" edit from the diff.
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Working)]),
+    );
+    r.write("a.rs", "one\ntwo\nthree\n");
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Working)]),
+    );
+
+    app.reload().unwrap();
+    let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
+    let annotation = a.annotation.as_ref().expect("a changed file is annotated");
+    assert_eq!(annotation.additions, 2, "both agents' edits belong to the one open turn");
+}
+
+#[test]
+fn a_turn_ends_only_once_every_agent_rests() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+    let both = |a, b| vec![agent_in(&root, a), agent_in(&root, b)];
+
+    observe_agents(&mut app, &mut host, Some(&both(Status::Idle, Status::Idle)));
+    observe_agents(&mut app, &mut host, Some(&both(Status::Working, Status::Working)));
+    let still_working = host.observe_agents(Some(&both(Status::Idle, Status::Working)));
+    assert!(!still_working.ended, "one agent still working keeps the turn open");
+    let rested = host.observe_agents(Some(&both(Status::Idle, Status::Done)));
+    assert!(rested.ended, "the turn ends once every agent rests");
+}
+
+#[test]
+fn a_prompt_answered_into_rest_still_ends_the_turn() {
+    // working → blocked → idle never puts a working sample next to the end, so reading the
+    // edge off the previous sample alone would strand the `PR` tab's per-turn refetch.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Idle)]));
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Working)]));
+    let held = host.observe_agents(Some(&[agent_in(&root, Status::Blocked)]));
+    assert!(!held.ended, "the permission prompt holds the turn open");
+    let rested = host.observe_agents(Some(&[agent_in(&root, Status::Idle)]));
+    assert!(rested.ended, "answering the prompt into idle ends the turn");
+}
+
+#[test]
+fn an_empty_worktree_rests_so_the_first_agent_starts_a_turn() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+
+    observe_agents(&mut app, &mut host, Some(&[]));
+    assert_eq!(app.turn_wait_message(), "no agent works here", "no agents means empty");
+    // The first agent to arrive and work starts a turn, since the empty worktree rested.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn", "the agent is a member");
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+
+    app.reload().unwrap();
+    assert!(!app.awaiting_turn(), "the arriving agent's turn formed a baseline");
+    assert!(app.entries.iter().any(|f| f.path == "a.rs"), "its edit shows");
+}
+
+#[test]
+fn an_agent_in_a_second_worktree_of_the_repository_is_not_a_member() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let elsewhere = tempfile::TempDir::new().expect("tempdir");
+    let sibling = elsewhere.path().join("wt");
+    r.git(&["worktree", "add", "-q", sibling.to_str().unwrap(), "-b", "other"]);
+
+    let (mut app, mut host) = turn_setup(&r);
+    // Rest first, so a wrongly-admitted sibling's rest→work edge would start a turn and
+    // fail the baseline assertion below rather than hiding behind the unobserved first sample.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Idle)]));
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Working)]));
+    assert_eq!(
+        app.turn_wait_message(),
+        "no agent works here",
+        "a second worktree resolves to its own top level"
+    );
+
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Working)]));
+    app.reload().unwrap();
+    assert!(app.awaiting_turn(), "a non-member's work never forms this worktree's baseline");
+}
+
+#[test]
+fn an_agent_whose_cwd_is_not_an_absolute_path_is_not_a_member() {
+    // herdr's `cwd` is external input. `git -C ""` does no chdir at all and answers with
+    // reviewr's own directory — the reviewed repo — so a blank or relative spelling would
+    // otherwise admit an agent working somewhere else entirely.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let nowhere = |cwd: &str| AgentSample { cwd: Some(cwd.to_string()), status: Status::Working };
+
+    observe_agents(&mut app, &mut host, Some(&[nowhere(""), nowhere("sub")]));
+    assert_eq!(app.agents_present(), Some(false), "neither spelling names a worktree");
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[nowhere("")]));
+    app.reload().unwrap();
+    assert!(app.awaiting_turn(), "a non-member never forms this worktree's baseline");
+}
+
+#[test]
+fn an_agent_in_a_subdirectory_belongs_to_the_worktree() {
+    // The path is not the repo root, so this goes through the git resolution rather than the
+    // exact-match fast path.
+    let r = Repo::init();
+    r.write("sub/a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let sub = r.path().join("sub");
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Idle)]));
+    assert_eq!(
+        app.turn_wait_message(),
+        "waiting for the first turn",
+        "a subdirectory resolves to the same top level"
+    );
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Working)]));
+    r.write("sub/a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Working)]));
+
+    app.reload().unwrap();
+    assert!(!app.awaiting_turn(), "the subdirectory agent's turn counts");
+}
+
+#[test]
+fn a_failed_enumeration_keeps_the_previous_membership() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+
+    // A hiccup before any poll has ever succeeded observed nothing, so it may not claim the
+    // worktree is empty — the sidebar has no idea yet (`specs/herdr-host.md`).
+    observe_agents(&mut app, &mut host, None);
+    assert_eq!(app.agents_present(), None, "a failed enumeration observes nothing");
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn", "so it waits");
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Idle)]));
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn");
+    observe_agents(&mut app, &mut host, None); // herdr hiccup
+    assert_eq!(
+        app.turn_wait_message(),
+        "waiting for the first turn",
+        "a failed enumeration never flips the empty state"
+    );
+
+    // A hiccup mid-turn neither ends the turn nor re-baselines it on resume: the edit made
+    // while herdr was unreachable stays inside the one open turn.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    r.write("a.rs", "one\ntwo\n");
+    let hiccup = host.observe_agents(None);
+    assert!(!hiccup.ended, "a failed enumeration never ends the turn");
+    assert_eq!(hiccup.agents_present, None, "a failed enumeration observes nothing");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    app.reload().unwrap();
+    let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
+    assert_eq!(a.annotation.as_ref().unwrap().additions, 1, "the mid-hiccup edit is in the turn");
+
+    let emptied = host.observe_agents(Some(&[]));
+    assert_eq!(emptied.agents_present, Some(false), "a successful empty enumeration observes it");
 }
 
 /// The visible-row index of the file at `path`, or `None` when it is hidden/absent.
@@ -3659,7 +3889,7 @@ fn a_superseded_completion_syncs_the_baseline_but_paints_nothing() {
     r.write("d.rs", "d\n");
     let mut stale = completion_for(&app, 3);
     stale.input.turn_baseline = Some("cafe".into());
-    stale.turn = Some(herdr_reviewr::world::TurnReport { ended: true });
+    stale.turn = Some(herdr_reviewr::world::TurnReport { ended: true, agents_present: Some(true) });
     let before = app.entries.clone();
     assert!(
         !herdr_reviewr::land_world_completion(&mut app, stale, 4),
@@ -3667,6 +3897,11 @@ fn a_superseded_completion_syncs_the_baseline_but_paints_nothing() {
     );
     assert_eq!(app.entries, before, "a superseded snapshot never paints");
     assert!(app.pr_pending.is_some(), "the turn end still schedules the PR refetch");
+    assert_eq!(
+        app.agents_present(),
+        Some(true),
+        "membership syncs from a superseded completion too"
+    );
     assert_eq!(
         app.world_input().turn_baseline.as_deref(),
         Some("cafe"),

@@ -598,7 +598,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
     if app.file_rows.is_empty() {
         let msg = match app.tab {
             Tab::AllFiles => "no files",
-            Tab::Changes if app.awaiting_turn() => "waiting for the agent's next turn",
+            Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => "no changes",
         };
         frame.render_widget(dim_paragraph(msg, p), inner);
@@ -875,7 +875,7 @@ fn render_diff_view(frame: &mut Frame, app: &App, area: Rect) {
                 FileState::Normal if app.diff_path.is_some() => "empty file",
                 FileState::Normal => "select a file to read",
             },
-            Tab::Changes if app.awaiting_turn() => "waiting for the agent's next turn",
+            Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => match app.diff.state {
                 FileState::Binary => "binary — no line comments",
                 FileState::TooLarge => "file too large to diff",

@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-07-28
+
+### Changed
+- **Last turn works with any number of agents, in any sidebar placement.** A turn now belongs to
+  the worktree rather than to one agent reviewr had to guess at. Work starts when any agent in the
+  worktree starts and ends when they all stop, so two agents on one worktree read as one turn
+  instead of stalling the scope. Before, anything reviewr could not resolve to exactly one agent
+  left `last turn` waiting forever, which is what happened with a second agent around or with the
+  sidebar in its own tab. The `PR` tab's per-turn refresh was stuck the same way and comes back
+  with it.
+- **Last turn says why it is empty.** It reads `no agent works here` when nothing is running in the
+  worktree, and `waiting for the first turn` when an agent is there but has not started yet. The
+  old single message claimed a turn was coming even when none could.
+- **reviewr now needs herdr 0.7.5.** Worktree turns read each agent's working directory from
+  `herdr agent list`, which older versions are not known to report.
+
+### Fixed
+- **The `PR` tab refreshes after a turn you answered a prompt in.** A turn that went from working
+  to a permission prompt and then straight to idle never registered as having ended, so the tab
+  skipped its per-turn refetch for it.
+
 ## [0.25.1] — 2026-07-27
 
 ### Changed

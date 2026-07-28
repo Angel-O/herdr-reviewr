@@ -1,7 +1,11 @@
-//! herdr host integration: resolve the agent pane and send to it.
+//! herdr host integration: resolve the agent pane to send to, and sample the agents turn
+//! tracking watches.
 //!
-//! See `specs/herdr-host.md`. Uses the herdr CLI via `$HERDR_BIN_PATH`. Only the
-//! agent-send export depends on this module; browsing and clipboard do not.
+//! See `specs/herdr-host.md`. Uses the herdr CLI via `$HERDR_BIN_PATH`. The two readers ask
+//! different questions and neither narrows the other: [`send_target`] resolves candidates
+//! from the sidebar's herdr workspace, while [`agent_samples`] reports every agent and lets
+//! the caller decide membership by worktree. Only these two depend on this module; browsing
+//! and the clipboard export do not.
 
 use std::collections::HashMap;
 use std::env;
@@ -38,6 +42,9 @@ struct AgentPane {
     pane_id: String,
     tab_id: String,
     workspace_id: String,
+    /// Where the agent works. Turn tracking resolves it to a git top level to decide which
+    /// worktree the agent belongs to (`specs/herdr-host.md`).
+    cwd: Option<String>,
     name: Option<String>,
     display_agent: Option<String>,
     state_labels: Option<HashMap<String, String>>,
@@ -87,17 +94,15 @@ fn herdr(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The (tab, workspace, pane) id trio identifying this sidebar in the herdr environment.
-fn agent_env() -> (Option<String>, Option<String>, Option<String>) {
-    (
-        env::var("HERDR_TAB_ID").ok(),
-        env::var("HERDR_WORKSPACE_ID").ok(),
-        env::var("HERDR_PANE_ID").ok(),
-    )
+/// The (workspace, pane) id pair identifying this sidebar in the herdr environment. There is
+/// no tab here on purpose: the send scopes to the workspace and turn tracking scopes to the
+/// worktree, so nothing reads `HERDR_TAB_ID` and the sidebar's placement changes neither.
+fn agent_env() -> (Option<String>, Option<String>) {
+    (env::var("HERDR_WORKSPACE_ID").ok(), env::var("HERDR_PANE_ID").ok())
 }
 
 /// The agents herdr currently lists. The one place the `agent list` call and its envelope
-/// parsing live, shared by pane and status resolution.
+/// parsing live, shared by the send's pane resolution and turn tracking's sampling.
 fn agent_list() -> Result<Vec<AgentPane>> {
     parse_agents(&herdr(&["agent", "list"])?)
 }
@@ -107,7 +112,7 @@ fn agent_list() -> Result<Vec<AgentPane>> {
 /// than reporting a count herdr never gave. Either refusal is the whole status line, so both
 /// stay one short sentence naming the clipboard the reviewer can fall back to.
 pub fn send_target() -> Result<SendTarget> {
-    let (_, ws, me) = agent_env();
+    let (ws, me) = agent_env();
     let agents = match agent_list() {
         Ok(agents) => agents,
         Err(e) => {
@@ -117,10 +122,10 @@ pub fn send_target() -> Result<SendTarget> {
             bail!("herdr did not answer — copy to the clipboard instead")
         }
     };
-    // Candidacy is decided once, here: an `agent` field, our workspace, not our own pane
-    // Rows keep `agent list` order, which is herdr's own
-    // (`specs/herdr-host.md`).
-    let picked = candidates(&agents, ws.as_deref(), me.as_deref(), |agent| &agent.workspace_id);
+    // Candidacy is decided once, here: an `agent` field, our workspace, not our own pane.
+    // Rows keep `agent list` order, which is herdr's own (`specs/herdr-host.md`). Turn
+    // tracking does not come through here: it asks where each agent works instead.
+    let picked = candidates(&agents, ws.as_deref(), me.as_deref());
     match picked.len() {
         0 => bail!("no agent here — copy to the clipboard instead"),
         // The sole-agent send shows no row, so only the picker pays for the tab-label call.
@@ -170,6 +175,13 @@ impl AgentPane {
     /// The lifecycle status turn tracking reads from this pane.
     fn status(&self) -> Status {
         Status::from_wire(&self.agent_status)
+    }
+
+    /// A real agent pane other than our own — the shared gate both readers apply, so turn
+    /// sampling and send targeting never drift on what counts as an agent
+    /// (`../docs/herdr-api-notes.md`).
+    fn is_agent_other_than(&self, me: Option<&str>) -> bool {
+        self.agent.is_some() && Some(self.pane_id.as_str()) != me
     }
 }
 
@@ -233,50 +245,47 @@ fn parse_agents(json: &str) -> Result<Vec<AgentPane>> {
     Ok(response.result.agents)
 }
 
-/// The resolved agent's `agent_status` (`idle`/`working`/`blocked`/`done`/`unknown`), for
-/// turn tracking (`specs/herdr-host.md`). `Ok(None)` when no agent resolves, so the caller
-/// treats an absent or ambiguous agent the same as a missing herdr — turn tracking pauses.
-pub fn resolved_agent_status() -> Result<Option<Status>> {
-    let (tab, ws, me) = agent_env();
-    Ok(pick_agent(&agent_list()?, tab.as_deref(), ws.as_deref(), me.as_deref())
-        .map(AgentPane::status))
+/// One agent as turn tracking sees it: where it works, and what it is doing. Membership is
+/// the caller's to decide, since only the worker knows the reviewed worktree
+/// (`specs/herdr-host.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSample {
+    pub cwd: Option<String>,
+    pub status: Status,
 }
 
-/// The sole agent in this tab, else the sole workspace agent, for turn tracking
-/// (`specs/herdr-host.md`). `None` when nothing
-/// resolves — zero candidates or an ambiguous set alike pause tracking. The send never
-/// resolves this way; an ambiguous workspace opens the picker instead.
-fn pick_agent<'a>(
-    agents: &'a [AgentPane],
-    tab: Option<&str>,
-    ws: Option<&str>,
-    me: Option<&str>,
-) -> Option<&'a AgentPane> {
-    if let &[agent] = candidates(agents, tab, me, |agent| &agent.tab_id).as_slice() {
-        return Some(agent);
-    }
-    match candidates(agents, ws, me, |agent| &agent.workspace_id).as_slice() {
-        &[agent] => Some(agent),
-        _ => None,
-    }
+/// Every agent herdr reports, minus our own pane. Neither the tab nor the workspace narrows
+/// this (see the module header). `Err` means the enumeration failed, which the caller treats
+/// as "nothing changed" rather than "no agents".
+pub fn agent_samples() -> Result<Vec<AgentSample>> {
+    let (_, me) = agent_env();
+    Ok(samples_of(agent_list()?, me.as_deref()))
 }
 
-/// The real agents whose projected ID equals `want`, ignoring our own pane `me`. Only entries
-/// carrying an `agent` field count. herdr 0.7.5 already keeps non-agent panes
+/// The sampling rule, split out so it is testable without the CLI. Only entries carrying an
+/// `agent` field count, and our own pane never does.
+fn samples_of(agents: Vec<AgentPane>, me: Option<&str>) -> Vec<AgentSample> {
+    agents
+        .into_iter()
+        .filter(|agent| agent.is_agent_other_than(me))
+        .map(|agent| AgentSample { status: agent.status(), cwd: agent.cwd })
+        .collect()
+}
+
+/// The real agents in workspace `ws`, ignoring our own pane `me`. Only entries carrying an
+/// `agent` field count. herdr 0.7.5 already keeps non-agent panes
 /// out of `agent list`, so both filters are defensive: a plugin sidebar or a plain shell shows
 /// up in `pane list` with `agent: null` and never here (`../docs/herdr-api-notes.md`).
 fn candidates<'a>(
     agents: &'a [AgentPane],
-    want: Option<&str>,
+    ws: Option<&str>,
     me: Option<&str>,
-    id: impl Fn(&'a AgentPane) -> &'a str,
 ) -> Vec<&'a AgentPane> {
-    let Some(want) = want else { return Vec::new() };
+    let Some(ws) = ws else { return Vec::new() };
     agents
         .iter()
-        .filter(|agent| agent.agent.is_some())
-        .filter(|agent| id(agent) == want)
-        .filter(|agent| Some(agent.pane_id.as_str()) != me)
+        .filter(|agent| agent.is_agent_other_than(me))
+        .filter(|agent| agent.workspace_id == ws)
         .collect()
 }
 
@@ -298,9 +307,7 @@ pub fn focus(pane: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AgentChoice, AgentPane, HashMap, Status, parse_agents, parse_tab_labels, pick_agent,
-    };
+    use super::{AgentChoice, AgentPane, HashMap, Status, parse_agents, parse_tab_labels};
 
     /// One agent entry shaped like the real `herdr agent list` output (api notes).
     fn agent(pane: &str, tab: &str, ws: &str) -> AgentPane {
@@ -327,16 +334,6 @@ mod tests {
         }
     }
 
-    /// [`pick_agent`] reduced to the picked `pane_id`, for terse assertions.
-    fn pick(
-        agents: &[AgentPane],
-        tab: Option<&str>,
-        ws: Option<&str>,
-        me: Option<&str>,
-    ) -> Option<String> {
-        pick_agent(agents, tab, ws, me).map(|agent| agent.pane_id.clone())
-    }
-
     /// The picker-row mapping `send_target`'s Many arm applies to the workspace candidates.
     fn rows(
         agents: &[AgentPane],
@@ -344,76 +341,44 @@ mod tests {
         me: Option<&str>,
         tabs: &HashMap<String, String>,
     ) -> Vec<AgentChoice> {
-        super::candidates(agents, ws, me, |agent| &agent.workspace_id)
-            .into_iter()
-            .map(|agent| agent.choice(tabs))
-            .collect()
+        super::candidates(agents, ws, me).into_iter().map(|agent| agent.choice(tabs)).collect()
     }
 
     #[test]
-    fn pick_prefers_the_tab_agent_over_the_workspace() {
-        let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p2", "w8:t2", "w8")];
-        // Both share workspace w8; our tab is w8:t2, so its pane wins.
-        assert_eq!(pick(&agents, Some("w8:t2"), Some("w8"), None), Some("w8:p2".to_string()));
+    fn sampling_keeps_every_tab_and_workspace() {
+        // Turn tracking asks where an agent works, never where its pane sits, so neither the
+        // sidebar's tab nor its workspace narrows the sample (HH-TURN-PER-WORKTREE). This is
+        // what makes the `tab` placement track exactly like `split`.
+        let agents = vec![
+            AgentPane { cwd: Some("/w/one".into()), ..agent("w8:p1", "w8:t1", "w8") },
+            AgentPane { cwd: Some("/w/two".into()), ..agent("w8:p2", "w8:t2", "w8") },
+            AgentPane { cwd: Some("/w/three".into()), ..agent("w9:p1", "w9:t1", "w9") },
+        ];
+        let cwds: Vec<_> =
+            super::samples_of(agents, None).into_iter().filter_map(|s| s.cwd).collect();
+        assert_eq!(cwds, ["/w/one", "/w/two", "/w/three"]);
     }
 
     #[test]
-    fn pick_falls_back_to_the_sole_workspace_agent() {
-        let agents = vec![agent("w8:p1", "w8:t1", "w8")];
-        // No agent shares our tab, but exactly one is in the workspace.
-        assert_eq!(pick(&agents, Some("w8:tX"), Some("w8"), None), Some("w8:p1".to_string()));
+    fn sampling_drops_our_own_pane_and_every_non_agent_pane() {
+        let agents = vec![
+            AgentPane { cwd: Some("/w/real".into()), ..agent("w3:p1", "w3:t1", "w3") },
+            AgentPane { cwd: Some("/w/shell".into()), ..non_agent_pane("w3:p4", "w3:t1", "w3") },
+            AgentPane { cwd: Some("/w/self".into()), ..agent("w3:p5", "w3:t1", "w3") },
+        ];
+        let cwds: Vec<_> =
+            super::samples_of(agents, Some("w3:p5")).into_iter().filter_map(|s| s.cwd).collect();
+        assert_eq!(cwds, ["/w/real"]);
     }
 
     #[test]
-    fn the_reviewr_pane_excludes_itself_so_the_real_agent_resolves() {
-        // Even if herdr listed our own sidebar pane (w8:p5) as an agent alongside the real
-        // one (w8:p1), excluding our pane leaves the real agent unambiguous.
-        let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p5", "w8:t1", "w8")];
-        assert_eq!(
-            pick(&agents, Some("w8:t1"), Some("w8"), Some("w8:p5")),
-            Some("w8:p1".to_string())
-        );
-    }
-
-    #[test]
-    fn non_agent_panes_do_not_make_the_tab_ambiguous() {
-        // A tab holding one real agent plus a non-agent pane (another plugin's sidebar, a
-        // plain shell) resolves to the agent, not an ambiguity refusal.
-        let agents = vec![agent("w3:p1", "w3:t1", "w3"), non_agent_pane("w3:p4", "w3:t1", "w3")];
-        assert_eq!(
-            pick(&agents, Some("w3:t1"), Some("w3"), Some("w3:p5")),
-            Some("w3:p1".to_string())
-        );
-    }
-
-    #[test]
-    fn only_non_agent_panes_resolve_no_one() {
-        // A tab and workspace holding nothing but non-agent panes resolves no one.
-        let agents =
-            vec![non_agent_pane("w3:p2", "w3:t1", "w3"), non_agent_pane("w3:p4", "w3:t1", "w3")];
-        assert_eq!(pick(&agents, Some("w3:t1"), Some("w3"), None), None);
-    }
-
-    #[test]
-    fn no_matching_agent_resolves_no_one() {
-        let agents = vec![agent("w9:p1", "w9:t1", "w9")];
-        // An agent exists, but in another workspace entirely — nothing resolves.
-        assert_eq!(pick(&agents, Some("w8:t1"), Some("w8"), None), None);
-    }
-
-    #[test]
-    fn two_workspace_agents_resolve_no_one() {
-        let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p2", "w8:t2", "w8")];
-        // Neither shares our tab and the workspace has two — tracking refuses to guess.
-        assert_eq!(pick(&agents, Some("w8:tZ"), Some("w8"), None), None);
-    }
-
-    #[test]
-    fn two_tab_agents_resolve_no_one_even_without_a_workspace_id() {
-        let agents = vec![agent("w8:p1", "w8:t1", "w8"), agent("w8:p2", "w8:t1", "w8")];
-        // Two agents share our tab and no workspace id is available to widen the scope —
-        // tracking still refuses to guess between them.
-        assert_eq!(pick(&agents, Some("w8:t1"), None, None), None);
+    fn a_sample_carries_the_status_tracking_folds() {
+        let agents = vec![AgentPane {
+            agent_status: "blocked".into(),
+            cwd: Some("/w/one".into()),
+            ..agent("w8:p1", "w8:t1", "w8")
+        }];
+        assert_eq!(super::samples_of(agents, None)[0].status, Status::Blocked);
     }
 
     /// One agent carrying the picker-facing fields herdr omits until something sets them.
@@ -488,8 +453,11 @@ mod tests {
             non_agent_pane("w3:p4", "w3:t1", "w3"),
             agent("w3:p5", "w3:t1", "w3"),
         ];
-        let rows = rows(&agents, Some("w3"), Some("w3:p5"), &HashMap::new());
-        assert_eq!(rows.iter().map(|r| r.pane_id.as_str()).collect::<Vec<_>>(), ["w3:p1"]);
+        let rows_of = |ws| rows(&agents, ws, Some("w3:p5"), &HashMap::new());
+        let picked: Vec<_> = rows_of(Some("w3")).iter().map(|r| r.pane_id.clone()).collect();
+        assert_eq!(picked, ["w3:p1"]);
+        // No workspace id means no candidates — never every agent on the machine.
+        assert!(rows_of(None).is_empty());
     }
 
     #[test]
@@ -516,8 +484,13 @@ mod tests {
 
     #[test]
     fn parse_agents_accepts_only_the_documented_envelope() {
-        let wrapped = r#"{"result":{"agents":[{"agent":"claude","agent_status":"working","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8"}]}}"#;
-        assert_eq!(parse_agents(wrapped).unwrap(), [agent("w8:p1", "w8:t1", "w8")]);
+        // `cwd` is asserted from the wire on purpose: it is the one field worktree
+        // membership rides on, so a renamed key must fail here, not silently in production.
+        let wrapped = r#"{"result":{"agents":[{"agent":"claude","agent_status":"working","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8","cwd":"/w/one"}]}}"#;
+        assert_eq!(
+            parse_agents(wrapped).unwrap(),
+            [AgentPane { cwd: Some("/w/one".into()), ..agent("w8:p1", "w8:t1", "w8") }]
+        );
         assert!(parse_agents("[]").is_err());
     }
 

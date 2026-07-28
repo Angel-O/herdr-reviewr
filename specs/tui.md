@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-26
+Last edited: 2026-07-27
 ---
 
 # TUI
@@ -26,24 +26,22 @@ The terminal frame: the two-pane layout, the tabs, and how the view stays curren
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- The header shows the three tabs with the active one highlighted, the active scope, the changed-file count with the scope's `+added −removed` line totals, and a clickable `Send` button with the comment count. The totals drop a zero side and vanish when nothing changed, like a file row's stats (`file-list.md`).
-- The read pane shows the selected file's diff or content (`diff-view.md`). The navigator pane shows the active tab's choices.
-- The comment input opens inline, directly under the last line of the selection (`input.md`). It pushes the diff below it down and grows as you type. It is never a footer band.
+- The header carries the three tabs with the active one highlighted, the active scope, the changed-file count with the scope's `+added −removed` totals, and a clickable `Send` button with the comment count (`input.md`).
+- The header's line totals drop a zero side and vanish when nothing changed, like a file row's stats (`file-list.md`).
+- The active tab sets both panes: diff and changed files in `Changes`, content and repo tree in `All files`, checks and comments in `PR` (`diff-view.md`, `pr-tab.md`).
+- The comment input opens inline, directly under the last line of the selection, and grows as you type (`input.md`). It is never a footer band.
 - The footer is a live action bar (`input.md`).
-- The comments list and the agent picker open as popups over the body (`input.md`, `herdr-host.md`). While one is open, every painted color in the header and the body recedes halfway to the theme base. The footer stays bright, since it carries the popup's own keys.
-- The active tab sets both panes: diff and changed files in `Changes`, content and repo tree in `All files`, checks and comments in `PR` (`pr-tab.md`).
+- The comments list and the agent picker open as popups over the body (`input.md`, `herdr-host.md`). While one is open, every painted color in the header and the body recedes halfway to the theme base. The footer stays bright.
 - The review loop is the same in `Changes` and `All files`. `PR` is a read-only mirror. Comments are one set across the authoring tabs and export together.
 
-The navigator has one global position across all tabs.
+The navigator has one global position across all tabs, and the position derives the split direction.
 
-| position | layout                                      |
-| -------- | ------------------------------------------- |
-| `right`  | read pane left, navigator right (default)   |
-| `left`   | navigator left, read pane right             |
-| `top`    | navigator above the read pane               |
-| `bottom` | read pane above the navigator               |
-
-The position derives the split direction. Left and right split columns. Top and bottom split rows.
+| position | layout                                    |
+| -------- | ----------------------------------------- |
+| `right`  | read pane left, navigator right (default) |
+| `left`   | navigator left, read pane right           |
+| `top`    | navigator above the read pane             |
+| `bottom` | read pane above the navigator             |
 
 | positions       | default navigator share | allowed share |
 | --------------- | ----------------------- | ------------- |
@@ -54,47 +52,47 @@ The side and stacked shares are separate session values. Switching position rest
 
 Dragging the divider changes the active split direction's share. A resize never crosses that direction's allowed range.
 
-When the split axis has at least six cells, each pane keeps at least three cells along that axis: two border cells and one interior cell. Below six cells, the body divides as evenly as possible. The navigator position does not change, and drawing and hit-testing stay inside the allocated rectangles.
+When the split axis has at least six cells, each pane keeps at least three cells along it. Below six cells, the body divides as evenly as possible and the navigator position does not change.
 
-Every layout change preserves the focused pane and each pane's cursor or selection identity. Scroll stays where it is valid in the new viewport and otherwise clamps. Both remembered shares persist.
+A layout change moves nothing else (`overview.md`), and both remembered shares persist across it.
 
 ## Behavior
 
 ### Tabs
 
-- Each tab owns its content state: the open file or card, scroll, cursor, fold expansions, and preview choice. Nothing carries between tabs. The footer's shortcut expansion is not tab state — it is one global toggle (`input.md`).
-- Switching away and back restores the tab exactly.
+- Each tab owns its content state: the open file or card, scroll, cursor, fold expansions, and preview choice. Nothing carries between tabs, and switching away and back restores the tab exactly.
+- The footer's shortcut expansion is one global toggle, not tab state (`input.md`).
 - A first visit opens the tab's first file or card. A collapsed tree with the cursor on a directory opens nothing until a pick.
 - A tab switch keeps the focused pane. An empty read pane focuses the navigator.
 
 ### Refresh
 
 - The view polls the worktree every `N` seconds, default 2, configurable.
-- A poll rebuilds the changed set and the file tree off the frame loop. The result reconciles into the view, keeping the selected file and scroll where the file still exists, and refreshes the open diff as it lands.
+- A poll rebuilds the changed set and the file tree, reconciles them into the view (`overview.md`), and refreshes the open diff as it lands.
 - A result lands whole: the header counts and the list they head come from one refresh.
 - A result lands only when the view it described is still current: the same repository, tab, scope, and scope base. The scope base is the branch base or the turn baseline. A result that no longer matches is discarded, and a newer request supersedes an older one.
-- Entering a file tab paints the tab's stashed state in the switch frame, exactly as it was left. A refresh lands behind it — stale until it lands, never wrong (`overview.md` Continuity). A first-ever visit has no stash to paint and loads before its frame, so the header never describes a tab that shows nothing.
-- A scope switch rebuilds the changed set before its frame, so the list never shows another scope's files under the new scope's label. A `last-turn` switch diffs against the most recently observed baseline. The `All files` tree re-marks its rows in place and refreshes behind the switch.
+- Entering a file tab paints the tab's stashed state in the switch frame, exactly as it was left, and a refresh lands behind it (`overview.md`). A first-ever visit has no stash and loads before its frame.
+- A scope switch rebuilds the changed set before its frame. A `last-turn` switch diffs against the most recently observed baseline. The `All files` tree re-marks its rows in place and refreshes behind the switch.
 - While a comment is being composed, the input and its diff are frozen. A result that lands mid-composition leaves both untouched, however early its refresh began. The file list still updates.
 - `r` triggers an immediate refresh. Its result lands like a poll's.
-- `r`'s refresh shows a one-cell `⟳` immediately. An ambient refresh — a poll, a tab entry, a scope switch — shows it only after 200ms in flight. Once shown, the glyph holds for at least 300ms, then clears when the result has landed or been discarded. It paints in a reserved cell at the end of the tab strip, so nothing shifts when it appears. Each tab shows only its own refresh: the file tabs the world refresh, the `PR` tab its fetch.
-- The `PR` tab fetches on its own cadence (`pr-tab.md`), separate from the worktree poll.
-- Refresh uses no herdr events. The same poll samples the agent's status for the `last-turn` baseline (`herdr-host.md`).
-- In `last-turn` scope, before a turn start is observed, `Changes` shows `waiting for the agent's next turn`, never a stale or whole-worktree diff. `All files` keeps its content.
+- `r` shows a one-cell `⟳` immediately. An ambient refresh shows it only after 200ms in flight. Once shown, the glyph holds for at least 300ms. It paints in a reserved cell at the end of the tab strip, so nothing shifts when it appears.
+- Each tab shows only its own refresh: the file tabs the world refresh, the `PR` tab its fetch on its own cadence (`pr-tab.md`).
+- Refresh uses no herdr events. The same poll samples the agents in the worktree for the `last-turn` baseline (`herdr-host.md`).
+- In `last-turn` scope, before a turn start is observed, `Changes` names why it is empty and never shows a stale or whole-worktree diff. Both panes read one message, so they cannot disagree. A poll that found no agent in the worktree reads `no agent works here`; anything else, including membership no poll has observed yet, reads `waiting for the first turn` (`herdr-host.md`). `All files` keeps its content.
 
 ## Failure semantics
 
 - A poll never touches the comment input or saved comments. Draft text and caret survive every refresh.
-- A config error and its automatic-reload remedy replace the view. Saved comments always survive. An open composer or comments list survives with its tab's state, as does the footer's shortcut expansion. Recovery restores them.
+- A config error and its automatic-reload remedy replace the view. Saved comments, an open composer or comments list, and the footer's shortcut expansion all survive it (`config.md`).
 - A poll that finds no change makes no visible update: no flicker, no lost selection or scroll.
 - A refresh in flight never delays input or a paint.
-- Opening a file builds its diff on the paint path. A first open of a very large file can briefly block.
-- Clipboard and agent-send calls run synchronously between frames. A hung send can briefly block input.
+- A first open of a very large file can briefly block.
+- A hung clipboard or agent send can briefly block input.
 
 ## Non-goals
 
 - No editing, staging, or committing from the UI.
-- No side-by-side split view. The diff is one unified column, split is roadmap.
+- No side-by-side split view. The diff is one unified column.
 - No per-tab navigator position. One position applies to every tab.
 - No automatic position or content-sized navigator. Layout changes only through config, `p`, resize keys, or dragging.
 - No hidden navigator. Both panes remain present.

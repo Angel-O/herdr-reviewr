@@ -17,7 +17,7 @@ the terminal.
 One persistent pane, pointed at a git worktree:
 
 - **Diff review** — the agent's changed files, syntax-highlighted.
-- **Last-turn diff** — what the agent's latest turn changed, on its own.
+- **Last-turn diff** — what the worktree's latest turn changed, on its own.
 - **Line comments** — select a range, write a note. One keystroke sends every note to the agent.
 - **File viewer** — any file's current content from the whole worktree.
 - **Search** — fuzzy file names and live code grep across the worktree, powered by [fff](https://github.com/dmtrKovalenko/fff).
@@ -176,7 +176,7 @@ opens in your browser (`http`/`https` only), and an anchor link jumps to its hea
 - **branch** — the working tree vs the merge-base with the base branch: **uncommitted** plus
   the branch's commits. Default base `origin/main`, then `origin/master`, `main`, `master`
   ([Base branch](#base-branch)).
-- **last turn** — only what the agent changed since its most recent turn started
+- **last turn** — everything that changed in this worktree since its most recent turn started
   ([Limitations](#limitations)).
 
 The sidebar starts in **uncommitted**. `default_scope` changes that. Switching with `u`/`b`/`t`
@@ -411,8 +411,9 @@ The known constraints:
 - **Send needs an agent in the workspace** — one agent takes the comments straight away, and
   several open a picker so you choose. With no agent, Send says so and keeps your comments.
 - **last turn relies on polling** (2 s default) — a turn that starts and finishes inside one
-  poll is missed, and the scope shows everything since the last *observed* turn start. It never
-  shows lines the agent didn't write, and it can span more than one turn.
+  poll is missed, and the scope shows everything since the last *observed* turn start. It can
+  span more than one turn. A turn belongs to the worktree, so with several agents in one
+  worktree the diff carries all of their work, and your own edits sit in it alongside theirs.
 
 **PR tab (GitHub, GitLab, and Azure DevOps)**
 - **Read-only** — needs the forge's authenticated CLI (`gh`, `glab`, or `az`) and a

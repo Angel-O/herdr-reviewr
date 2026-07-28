@@ -20,12 +20,14 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::Rect;
 
+// `cwd` rides every real `agent list` entry (api notes). Send ignores it and resolves from
+// the workspace, so it is here to keep the fixture honest rather than to steer the send.
 const TWO_AGENTS: &str = r#"{"result":{"agents":[
-  {"agent":"claude","agent_status":"idle","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8"},
-  {"agent":"codex","agent_status":"working","pane_id":"w8:p2","tab_id":"w8:t1","workspace_id":"w8"}
+  {"agent":"claude","agent_status":"idle","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8","cwd":"/w/one"},
+  {"agent":"codex","agent_status":"working","pane_id":"w8:p2","tab_id":"w8:t1","workspace_id":"w8","cwd":"/w/two"}
 ]}}"#;
 const ONE_AGENT: &str = r#"{"result":{"agents":[
-  {"agent":"claude","agent_status":"idle","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8"}
+  {"agent":"claude","agent_status":"idle","pane_id":"w8:p1","tab_id":"w8:t1","workspace_id":"w8","cwd":"/w/one"}
 ]}}"#;
 
 /// A fake herdr: answers `agent list` from `agents.json`, `tab list` with one label, logs
@@ -101,7 +103,6 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
             .env("HERDR_PANE_ID", "w8:p9")
             // The pane the sidebar was opened beside, level 2 of the highlight's arming ladder.
             .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"focused_pane_id":"w8:p2"}"#)
-            .env_remove("HERDR_TAB_ID")
             .output()
             .expect("re-exec the test with the fake herdr env");
         assert!(

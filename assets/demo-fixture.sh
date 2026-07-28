@@ -78,7 +78,6 @@ unset NO_COLOR
 cd "$D"
 exec env \
   HERDR_BIN_PATH="$TOOLS/mock-herdr" \
-  HERDR_TAB_ID=demo:t1 \
   "$BIN"
 EOF
 chmod +x "$TOOLS/demo-session"

@@ -64,7 +64,7 @@ pub fn run() -> Result<()> {
     let mut app = match &initial_config {
         Ok(plugin_config) => ready_app(&cfg, plugin_config.clone()),
         Err(error) => {
-            let mut app = App::blocked(cfg.repo.clone(), Scope::Uncommitted, cfg.base.clone());
+            let mut app = App::blocked(repo_root(&cfg), Scope::Uncommitted, cfg.base.clone());
             app.set_config_error(error.to_string());
             app
         }
@@ -110,11 +110,20 @@ fn restore_terminal(kbd: bool) {
     ratatui::restore();
 }
 
+/// The reviewed repository, resolved to its git top level. Every `App` goes through this,
+/// blocked or ready, so the app and the worker's `TurnHost` hold the same spelling: they key
+/// the baseline ref off it independently, and turn membership compares resolved top levels
+/// against it (`specs/herdr-host.md`).
+///
+/// A non-repo path is not an error — the sidebar opens to an empty state and starts showing
+/// changes if the directory becomes a repo.
+fn repo_root(cfg: &Config) -> std::path::PathBuf {
+    git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
+}
+
 /// Build a fresh working sidebar only after the plugin configuration has validated.
 fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
-    // A non-repo path is not an error — the sidebar opens to an empty state and starts showing
-    // changes if the directory becomes a repo (specs/herdr-host.md).
-    let repo = git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone());
+    let repo = repo_root(cfg);
     let scope = plugin_config.default_scope();
     logln!(
         "start repo={} poll={:?} base={:?} scope={}",
@@ -137,7 +146,7 @@ const STATUS_TTL: Duration = Duration::from_secs(4);
 
 /// While the `PR` tab is active, refetch the forge at least this often — a fallback for
 /// forge-side changes with no local signal (a reviewer's comment). Local pushes and forge PR
-/// actions refresh sooner, on the agent's turn-end, so this cadence is the slow safety net
+/// actions refresh sooner, on the worktree's turn-end, so this cadence is the slow safety net
 /// (specs/forge-host.md).
 const PR_POLL: Duration = Duration::from_mins(1);
 
@@ -534,10 +543,13 @@ pub fn land_world_completion(
     generation: u64,
 ) -> bool {
     app.sync_turn_baseline(completion.input.turn_baseline.clone());
-    if completion.turn.as_ref().is_some_and(|t| t.ended) {
-        // One fetch per turn, on any tab: the turn may have pushed or merged, and
-        // entering the tab then finds fresh work already underway (forge-host.md).
-        app.request_pr_refresh(crate::app::RefreshKind::Ambient);
+    if let Some(turn) = completion.turn.as_ref() {
+        app.sync_agents_present(turn.agents_present);
+        if turn.ended {
+            // One fetch per turn, on any tab: the turn may have pushed or merged, and
+            // entering the tab then finds fresh work already underway (forge-host.md).
+            app.request_pr_refresh(crate::app::RefreshKind::Ambient);
+        }
     }
     if completion.generation != generation {
         // A superseding job carries reveal=false, so a superseded switch's reveal would
@@ -1074,10 +1086,10 @@ fn event_loop(
                     continue;
                 }
                 schedule_poll_probe(&mut pr, app.tab);
-                // The tick's refresh runs on the worker. The same request samples the agent's
-                // status there, so a turn promoted by the sample is visible to the same
-                // request's changed-files build (specs/herdr-host.md). A turn end sets the PR
-                // refetch when the completion lands.
+                // The tick's refresh runs on the worker. The same request samples the agents
+                // in the worktree there, so a turn promoted by the sample is visible to the
+                // same request's changed-files build (specs/herdr-host.md). A turn end sets
+                // the PR refetch when the completion lands.
                 app.request_world_refresh(true, false);
                 logln!(
                     "poll files={} composing={} diff_cursor={} scroll={}",

@@ -77,14 +77,17 @@ command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — plugin_id 
 
 ## Resolve the agent / send comments
 
-`herdr agent list` → `{"result":{"agents":[ {pane_id, tab_id, workspace_id, agent_status, ...} ]}}`.
-It takes no flags, so the workspace filter is the caller's to apply. The row order is herdr's:
+`herdr agent list` → `{"result":{"agents":[ {pane_id, tab_id, workspace_id, agent_status, cwd, ...} ]}}`.
+It takes no flags, so any filter is the caller's to apply. The row order is herdr's:
 observed on 0.7.5 across 13 live agents, entries arrive grouped by workspace and by tab within a
 workspace. No sample held two agents in one tab, so the order inside a tab is unverified.
 
 - Send candidates = every agent in the sidebar's `HERDR_WORKSPACE_ID`. One sends directly,
-  several open the picker (`../specs/herdr-host.md`). Turn tracking still resolves `HERDR_TAB_ID`
-  first, then the workspace.
+  several open the picker (`../specs/herdr-host.md`). Turn tracking reads no pane topology at
+  all: it takes every agent's `cwd` and keeps those resolving to the sidebar's git top level.
+- `cwd` and `foreground_cwd` both carry the agent's working directory, and matched on every
+  entry of a 10-agent sample. Each entry also carries `agent_session` (a stable UUID),
+  `state_change_seq`, `focused`, and `terminal_title_stripped`, none of which reviewr reads.
 - 0.7.5 lists only real agent panes. A plugin sidebar or a plain shell appears in `pane list`
   with `agent: null` and never in `agent list`, so excluding our own pane is defensive.
 - `name`, `display_agent`, and `state_labels` are omitted entirely until something sets them.

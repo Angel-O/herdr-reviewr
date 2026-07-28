@@ -122,7 +122,7 @@ Details:
 ### Refresh
 
 - The first fetch starts when the panel opens.
-- A refetch fires on entering the tab, on the `refresh` binding (default `r`), and when the agent ends a turn — it may have pushed or merged with no local trace. On the tab, a fallback poll refetches every 60 seconds. Off the tab, no polling.
+- A refetch fires on entering the tab, on the `refresh` binding (default `r`), and when the worktree ends a turn (`herdr-host.md`, HH-TURN-PER-WORKTREE) — an agent may have pushed or merged with no local trace. On the tab, a fallback poll refetches every 60 seconds. Off the tab, no polling.
 - One fetch runs at a time. `refresh` cancels it and restarts. Any other trigger lets it finish and paint, then runs one fresh fetch.
 - A result shows only if everything it was fetched for — config, repository target, branch, pinned commits, branch names — still matches. Otherwise reviewr discards it and fetches again, on or off the tab.
 - Commits and pushes are freshness, never identity. They refetch behind the visible snapshot and never blank it: the same PR with newer work is stale, not wrong. The in-flight glyph covers the gap (`tui.md`).

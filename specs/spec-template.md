@@ -5,21 +5,16 @@ Last edited: YYYY-MM-DD
 ---
 
 <!--
-A spec is a communication medium. The user reviews it. Contributors learn from it.
-It is never a scratchpad. Optimize for reading speed, even in a one-line edit.
-The full bar lives in AGENTS.md. The essentials:
+A spec is the set of decisions currently in force, written so nobody re-decides one unknowingly.
+Every sentence is a decision: name the alternative that lost, or it is a forgery.
+A sentence leaves when its fork dies. The full bar lives in AGENTS.md.
+
 - One concept per doc. End-state truth: what must be TRUE when the change is done.
-- Structure derives from the domain, never the history of the discussion or investigation.
-- One fact per sentence. Linear sentences, no asides.
-- One grammatical template per list or table. Schema-first tables, columns padded to align raw.
-- Every collection states one admission rule and contains the complete admitted set.
-- Contract only: mechanism -> code, rationale -> PR, provenance -> git.
+- Invariants are the decisions that constrain other decisions. Every one carries a code.
+- The Overview is the whole teaching budget. Examples sit inside the decision they illustrate.
+- One fact per sentence. One grammatical template per list or table. Columns padded to align raw.
 - One home per fact. Link to that home everywhere else.
-- Invariants are optional. Add one only when it holds across operations, breaking it creates invalid
-  state, several operations or another spec rely on it, and no local section can state it better.
-  Code it (the doc's prefix + an uppercase kebab slug, `CHG-AT-MOST-ONCE`) only when another section,
-  spec, or test needs a stable citation.
-- Under ~2,000 words. Delete every section that does not earn its place.
+- Under ~2,000 words. Over it, audit the forks before splitting.
 -->
 
 # <Concept name>
@@ -28,7 +23,8 @@ The full bar lives in AGENTS.md. The essentials:
 
 ## Overview
 
-<Give the smallest useful mental model. Use an example when it teaches faster than prose.>
+<The smallest mental model that makes the decisions below legible. Use an example when it teaches
+faster than prose. This is the whole teaching budget.>
 
 ```json
 { "id": "chg_1A2b3C", "amount": 1099, "status": "succeeded" }
@@ -39,6 +35,15 @@ The full bar lives in AGENTS.md. The essentials:
 | `id`     | string  | unique charge identifier                         |
 | `amount` | integer | amount in the smallest currency unit             |
 | `status` | enum    | `pending`, `succeeded`, `failed`, or `unknown`   |
+
+## Invariants
+
+<Only decisions that constrain other decisions, each naming two designs it forbids.
+Every one carries a code. Delete the section otherwise.>
+
+| code                 | Always true                                            |
+| -------------------- | ------------------------------------------------------ |
+| `CHG-AT-MOST-ONCE`   | A charge captures at most once, however many retries.  |
 
 ## Behavior
 
@@ -53,7 +58,7 @@ The full bar lives in AGENTS.md. The essentials:
 ## Traces
 
 <Only for temporal contracts: the duplicate, the race, the crash. Delete otherwise.
-Steps share one shape: "actor does X. System does Y." -->
+Steps share one shape: "actor does X. System does Y." Every trace carries a code.>
 
 **CHG-CRASH-MID-CAPTURE: crash between debit and record**
 
@@ -68,7 +73,7 @@ Steps share one shape: "actor does X. System does Y." -->
 
 ## Non-goals
 
-<What this explicitly does not do. One shape per bullet.>
+<The decisions to omit. One shape per bullet.>
 
 - Does not handle refunds. See the refunds spec.
 

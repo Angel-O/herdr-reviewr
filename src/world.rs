@@ -6,7 +6,7 @@
 //! in `App::reconcile_world`, the one home for the Continuity rules (specs/overview.md).
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 use anyhow::Result;
@@ -14,8 +14,9 @@ use anyhow::Result;
 use crate::app::Tab;
 use crate::file_list::{Annotation, Entry};
 use crate::git;
+use crate::herdr::AgentSample;
 use crate::model::{ChangedFile, Scope};
-use crate::turn::{Status, TurnTracker};
+use crate::turn::{TurnTracker, WorktreeState};
 
 /// Everything the build reads. A landed snapshot reconciles only while the view still
 /// matches the input that produced it (specs/tui.md).
@@ -127,52 +128,152 @@ pub struct TurnHost {
     tracker: TurnTracker,
     repo: PathBuf,
     turn_key: String,
+    /// Each agent `cwd` resolved to whether it is a member of the reviewed worktree. Only a
+    /// resolved git top level is recorded, since a worktree root does not move, so a member is
+    /// placed once and never re-queried. A cwd git reports outside every worktree is not cached:
+    /// re-checking it is cheap, and a directory can become a worktree later. A cwd git could not
+    /// run for is not cached either, and holds the poll rather than counting the agent out, so a
+    /// transient failure never poisons a member for the session (specs/herdr-host.md).
+    resolved: HashMap<String, bool>,
 }
 
 /// One sample's outcome, sent back with the completion: whether it ended a turn (the `PR`
-/// tab's refetch signal). The baseline itself rides the completion's input.
+/// tab's refetch signal), and what this sample saw of the worktree's membership (the
+/// `last-turn` empty state). The baseline itself rides the completion's input.
 #[derive(Clone, Debug)]
 pub struct TurnReport {
     pub ended: bool,
+    /// `None` when the sample could not observe the whole worktree, so the reader keeps whatever
+    /// it already knew: either the enumeration failed, or a member's directory would not resolve
+    /// this poll. Membership is held on the one consumer that paints it, never mirrored here
+    /// (specs/herdr-host.md).
+    pub agents_present: Option<bool>,
+}
+
+/// An agent's relationship to the reviewed worktree, as [`TurnHost::membership`] resolves it.
+/// `Unknown` is not `NotMember`: it means git could not resolve the cwd this poll, so the fold
+/// holds on it rather than counting the agent out (specs/herdr-host.md).
+enum Membership {
+    Member,
+    NotMember,
+    Unknown,
+}
+
+/// The absolute cwd an agent names, or `None` for a blank or relative one. `git -C` resolves a
+/// relative directory against reviewr's own cwd, which is normally the reviewed worktree, so a
+/// relative cwd would be wrongly admitted as a member (specs/herdr-host.md).
+fn worktree_cwd(cwd: Option<&str>) -> Option<&str> {
+    cwd.filter(|c| Path::new(c).is_absolute())
+}
+
+/// Fold the members' statuses into the worktree's work state and whether any member is present,
+/// or `None` if a member's membership was undetermined — the caller then holds the sample.
+/// Pure over the `member` resolver so the fold-and-hold rule is unit-testable without git.
+fn classify(
+    samples: &[AgentSample],
+    mut member: impl FnMut(&AgentSample) -> Membership,
+) -> Option<(bool, WorktreeState)> {
+    let mut members = Vec::new();
+    for sample in samples {
+        match member(sample) {
+            Membership::Member => members.push(sample.status),
+            Membership::NotMember => {}
+            Membership::Unknown => return None,
+        }
+    }
+    Some((!members.is_empty(), WorktreeState::fold(members)))
 }
 
 impl TurnHost {
     /// Resume any persisted turn baseline for this worktree, so `last-turn` keeps its
     /// anchor across a sidebar restart (specs/herdr-host.md).
+    /// `repo` must already be the git top level, as [`crate::world::seed_baseline`] and
+    /// membership both compare against it and `App` derives the same baseline-ref key from
+    /// its own copy — normalizing here instead would key the two apart. `run` resolves it
+    /// once for both (`src/lib.rs`).
     pub fn open(repo: PathBuf) -> Self {
         let tracker = TurnTracker::with_baseline(seed_baseline(&repo));
         let turn_key = git::worktree_key(&repo);
-        Self { tracker, repo, turn_key }
+        Self { tracker, repo, turn_key, resolved: HashMap::new() }
     }
 
     pub fn baseline(&self) -> Option<&str> {
         self.tracker.baseline()
     }
 
-    /// Sample the agent's status over the herdr CLI and advance the baseline. Absence or
-    /// ambiguity pauses tracking; a missing herdr is normal, so failures only log.
+    /// Sample the agents over the herdr CLI and advance the baseline. A missing herdr is
+    /// normal, so a failed enumeration only logs and changes nothing.
     pub fn sample(&mut self) -> TurnReport {
-        self.observe(crate::herdr::resolved_agent_status().ok().flatten())
+        self.observe_agents(crate::herdr::agent_samples().ok().as_deref())
     }
 
-    /// Advance the baseline from one status sample — the core [`Self::sample`] wraps, and
-    /// the seam tests drive without herdr. On a turn start (a resting→`working` edge) it
-    /// snapshots the worktree as the candidate; while a candidate is pending it promotes
-    /// once the worktree diverges from it, persisting the new baseline. Git errors only
-    /// log, so a transient git failure never crashes the poll.
-    pub fn observe(&mut self, status: Option<Status>) -> TurnReport {
-        let Some(status) = status else { return TurnReport { ended: false } };
-        let transition = self.tracker.observe(status);
+    /// Advance the baseline from one enumeration — the core [`Self::sample`] wraps, and the
+    /// seam tests drive without herdr. `None` is a failed enumeration, which holds the
+    /// previous membership rather than reporting an empty worktree (specs/herdr-host.md).
+    pub fn observe_agents(&mut self, samples: Option<&[AgentSample]>) -> TurnReport {
+        let Some(samples) = samples else {
+            return TurnReport { ended: false, agents_present: None };
+        };
+        // A member whose membership git could not determine leaves the sample incomplete, so
+        // hold it exactly as a failed enumeration rather than reading an unresolved member as
+        // an empty worktree (specs/herdr-host.md).
+        let Some((present, state)) = classify(samples, |s| self.membership(s.cwd.as_deref()))
+        else {
+            return TurnReport { ended: false, agents_present: None };
+        };
+        let ended = self.observe(state);
+        TurnReport { ended, agents_present: Some(present) }
+    }
+
+    /// An agent's relationship to the reviewed worktree. The git top level is authoritative, so
+    /// a subdirectory is a member and a second worktree of the same repository is not
+    /// (specs/herdr-host.md).
+    fn membership(&mut self, cwd: Option<&str>) -> Membership {
+        let Some(cwd) = worktree_cwd(cwd) else {
+            return Membership::NotMember;
+        };
+        if let Some(&member) = self.resolved.get(cwd) {
+            return if member { Membership::Member } else { Membership::NotMember };
+        }
+        match git::worktree_of(Path::new(cwd)) {
+            // A resolved root is stable, so record whether it is a member and never shell out
+            // for this cwd again. git canonicalizes it, so the worktree root itself matches too.
+            git::Worktree::Root(top) => {
+                let member = top == self.repo;
+                self.resolved.insert(cwd.to_string(), member);
+                if member { Membership::Member } else { Membership::NotMember }
+            }
+            // git ran and found no worktree. A determination, but not a stable one, so it is
+            // re-checked next poll rather than cached.
+            git::Worktree::Outside => Membership::NotMember,
+            // git could not run, so nothing is known this poll. Hold rather than count the agent
+            // out, exactly as a failed enumeration does (specs/herdr-host.md).
+            git::Worktree::Unknown => Membership::Unknown,
+        }
+    }
+
+    /// Advance the baseline from one folded worktree state, returning whether a turn ended.
+    /// On a turn start it snapshots the worktree as the candidate; while a candidate is
+    /// pending it promotes once the worktree diverges from it, persisting the new baseline.
+    /// Git errors only log, so a transient git failure never crashes the poll.
+    fn observe(&mut self, state: WorktreeState) -> bool {
+        let transition = self.tracker.observe(state);
         if transition.started {
             match git::snapshot_worktree(&self.repo) {
-                Ok(sha) => self.tracker.set_candidate(sha),
+                // The candidate is this worktree as of a moment ago, so it cannot have
+                // diverged from it yet. The next poll runs the check, which is what makes
+                // this an early return rather than a second snapshot of the same tree.
+                Ok(sha) => {
+                    self.tracker.set_candidate(sha);
+                    return transition.ended;
+                }
                 Err(e) => logln!("turn snapshot failed: {e}"),
             }
         }
         // Promote the pending candidate once the turn has changed a file. Compare full
         // snapshots so a new untracked file counts as a change (specs/herdr-host.md).
         let Some(candidate) = self.tracker.candidate().map(str::to_string) else {
-            return TurnReport { ended: transition.ended };
+            return transition.ended;
         };
         match git::snapshot_worktree(&self.repo) {
             Ok(now) if now != candidate => {
@@ -184,14 +285,14 @@ impl TurnHost {
             Ok(_) => {}
             Err(e) => logln!("turn divergence check failed: {e}"),
         }
-        TurnReport { ended: transition.ended }
+        transition.ended
     }
 }
 
 /// One queued refresh's attributes, accumulated on `App` until the loop dispatches it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorldRequest {
-    /// Sample the agent's status — set by the poll alone (specs/tui.md).
+    /// Sample the agents in the worktree — set by the poll alone (specs/tui.md).
     pub sample_turn: bool,
     /// Re-reveal the cursor when the result lands — user-initiated switches only.
     pub reveal: bool,
@@ -203,8 +304,8 @@ pub struct WorldRequest {
 pub struct WorldJob {
     pub generation: u64,
     pub input: WorldInput,
-    /// Poll-driven requests sample the agent's status; tab entry and `r` do not, so the
-    /// herdr CLI call count tracks the poll alone (specs/tui.md).
+    /// Poll-driven requests sample the agents in the worktree; tab entry and `r` do not,
+    /// so the herdr CLI call count tracks the poll alone (specs/tui.md).
     pub sample_turn: bool,
     /// A user-initiated switch re-reveals the cursor when its result lands; a poll never
     /// does (specs/tui.md).
@@ -258,4 +359,69 @@ pub fn spawn(
             }
         })
         .expect("spawn world worker")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Membership, classify, worktree_cwd};
+    use crate::herdr::AgentSample;
+    use crate::turn::{Status, WorktreeState};
+
+    fn working_at(cwd: &str) -> AgentSample {
+        AgentSample { cwd: Some(cwd.into()), status: Status::Working }
+    }
+
+    #[test]
+    fn only_an_absolute_cwd_can_name_a_worktree() {
+        // A blank or relative cwd would resolve against reviewr's own cwd (the reviewed
+        // worktree), so membership must reject it before any git call (specs/herdr-host.md).
+        assert_eq!(worktree_cwd(Some("/abs/path")), Some("/abs/path"));
+        assert_eq!(worktree_cwd(Some("relative/path")), None);
+        assert_eq!(worktree_cwd(Some("")), None);
+        assert_eq!(worktree_cwd(None), None);
+    }
+
+    #[test]
+    fn membership_decides_the_fold_and_undetermined_holds() {
+        // One working agent, resolved three ways. `Unknown` holds the sample (the caller reads
+        // this `None` exactly as a failed enumeration, never as an empty worktree); a determined
+        // verdict folds normally (specs/herdr-host.md).
+        let samples = [working_at("/w")];
+        assert_eq!(classify(&samples, |_| Membership::Unknown), None);
+        assert_eq!(
+            classify(&samples, |_| Membership::Member),
+            Some((true, WorktreeState::Working))
+        );
+        assert_eq!(
+            classify(&samples, |_| Membership::NotMember),
+            Some((false, WorktreeState::Resting))
+        );
+    }
+
+    #[test]
+    fn one_undetermined_member_holds_even_beside_a_resolved_one() {
+        // A resolved working member does not rescue a sample that also holds an unknown one: an
+        // incomplete view of the worktree is held whole, not folded from the part that resolved.
+        let samples = [working_at("/a"), working_at("/b")];
+        let held = classify(&samples, |s| match s.cwd.as_deref() {
+            Some("/b") => Membership::Unknown,
+            _ => Membership::Member,
+        });
+        assert_eq!(held, None);
+    }
+
+    #[test]
+    fn a_non_members_status_never_reaches_the_fold() {
+        // A member resting and a non-member (a sibling worktree) working. Only the member's
+        // status folds, so the worktree reads Resting, never the sibling's Working.
+        let samples = [
+            AgentSample { cwd: Some("/mine".into()), status: Status::Idle },
+            AgentSample { cwd: Some("/sibling".into()), status: Status::Working },
+        ];
+        let folded = classify(&samples, |s| match s.cwd.as_deref() {
+            Some("/sibling") => Membership::NotMember,
+            _ => Membership::Member,
+        });
+        assert_eq!(folded, Some((true, WorktreeState::Resting)));
+    }
 }
