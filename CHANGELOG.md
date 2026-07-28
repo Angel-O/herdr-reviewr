@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.1] — 2026-07-28
+
 ### Fixed
 - **A `tab`-placement sidebar is now labeled in the tab bar.** herdr gives a fresh tab a bare
   number, so the sidebar showed up as a stray like `4` and got closed as clutter. It now names
