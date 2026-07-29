@@ -295,8 +295,29 @@ fn candidates<'a>(
 /// the logical-key `agent send-keys`, while `pane send-text` has carried the literal-text,
 /// no-Enter semantics unchanged since 0.7.0 (`docs/herdr-api-notes.md`).
 pub fn send_text(pane: &str, text: &str) -> Result<()> {
-    herdr(&["pane", "send-text", pane, text])?;
+    herdr(&["pane", "send-text", pane, &pasted(text)])?;
     Ok(())
+}
+
+const PASTE_START: &str = "\x1b[200~";
+const PASTE_END: &str = "\x1b[201~";
+
+/// The batch as one bracketed paste event, never raw bytes: a paste inserts verbatim in any
+/// input mode, where raw bytes execute as commands in a vim-style input resting in normal
+/// mode (`specs/herdr-host.md`). A terminator inside the batch would end the frame early and
+/// hand the tail to the command interpreter. The body is rebuilt with a suffix check per
+/// character, so a terminator never survives, not even one spliced together by an earlier
+/// removal — and the send stays linear, where a delete-and-rescan loop is quadratic on
+/// splice-heavy input and stalls the frame loop mid-send.
+fn pasted(text: &str) -> String {
+    let mut body = String::with_capacity(text.len());
+    for ch in text.chars() {
+        body.push(ch);
+        if body.ends_with(PASTE_END) {
+            body.truncate(body.len() - PASTE_END.len());
+        }
+    }
+    format!("{PASTE_START}{body}{PASTE_END}")
 }
 
 /// Focus the agent pane so the reviewer can add context and submit.
@@ -470,6 +491,23 @@ mod tests {
         // And with `name` explicitly null, as `herdr agent rename --clear` leaves it.
         let cleared = r#"{"result":{"agents":[{"agent":"codex","agent_status":"idle","pane_id":"w8:p2","tab_id":"w8:t1","workspace_id":"w8","name":null}]}}"#;
         assert_eq!(parse_agents(cleared).unwrap()[0].row_name(), "codex");
+    }
+
+    #[test]
+    fn a_send_wraps_the_batch_in_one_bracketed_paste_frame() {
+        // Issue #41's repro string: sent raw, vim ate the leading `b` and `i`.
+        assert_eq!(
+            super::pasted("bit/DESIGN.md:95 note"),
+            "\x1b[200~bit/DESIGN.md:95 note\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn an_embedded_paste_terminator_cannot_end_the_frame_early() {
+        // A diff snippet is raw file content and can carry the terminator. The second
+        // input splices one together across a removal.
+        assert_eq!(super::pasted("a\x1b[201~b"), "\x1b[200~ab\x1b[201~");
+        assert_eq!(super::pasted("a\x1b[201\x1b[201~~b"), "\x1b[200~ab\x1b[201~");
     }
 
     #[test]

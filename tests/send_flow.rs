@@ -164,6 +164,19 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     assert_eq!(app.status, "added 1 comment to claude");
     assert_eq!(app.last_sent_pane.as_deref(), Some("w8:p1"));
     assert!(log(&fake_dir).contains("pane send-text w8:p1"), "log: {}", log(&fake_dir));
+    // The start marker opens the payload at the CLI boundary; `pasted()` owns the rationale.
+    assert!(
+        log(&fake_dir).contains("pane send-text w8:p1 \u{1b}[200~"),
+        "the send is framed as a bracketed paste: {}",
+        log(&fake_dir)
+    );
+    // The batch's last bytes are the comment text "one", so this pins the terminator to the
+    // end of a delivered payload.
+    assert!(
+        log(&fake_dir).contains("one\u{1b}[201~"),
+        "the frame terminator closes the batch: {}",
+        log(&fake_dir)
+    );
     assert!(log(&fake_dir).contains("agent focus w8:p1"), "a send focuses its pane");
 
     // One agent: `s` sends straight through, no picker frame in between.

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-27
+Last edited: 2026-07-29
 ---
 
 # Review model
@@ -128,7 +128,7 @@ why drop this? it is still needed
 | order     | by `file`, then `start`                                                               |
 | preamble  | none                                                                                  |
 
-- Send injects every block into the agent input, focuses the agent pane, and clears the list. It never submits.
+- Send injects every block into the agent input, focuses the agent pane, and clears the list. It never submits (paste framing: `herdr-host.md`).
 - Copy writes the same blocks to the system clipboard, then clears the list.
 
 How the agent pane is found and filled is in `herdr-host.md`.

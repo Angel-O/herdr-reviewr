@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-27
+Last edited: 2026-07-29
 ---
 
 # herdr host
@@ -90,6 +90,8 @@ The binary reviews the pane's working directory, normalized to its git top level
 | no agent, or no answer | refuses and names the clipboard copy                                    |
 
 A candidate is any pane in the sidebar's herdr workspace carrying an `agent` field, except the sidebar's own. Placement never narrows the set, and no scope inside the workspace wins over another.
+
+The pane write wraps the batch in bracketed paste markers, never raw bytes. The write removes every paste terminator inside the batch. The clipboard export carries the batch untouched.
 
 A send that does not land says so in one short sentence and keeps every comment. It never shows herdr's own wording.
 
