@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.2] — 2026-07-29
+
+### Fixed
+- **Send arrives intact when the agent input is in vim normal mode.** The batch went to the
+  agent as raw bytes, so a vim-style input resting in normal mode ran its leading characters
+  as commands: `bit/…` arrived as `t/…`, and a batch starting with `dd` could edit whatever
+  was already typed. The send now travels as one bracketed paste, which the input inserts
+  literally in any mode. A paste terminator inside the batch is removed so it cannot end the
+  frame early. The clipboard export is unchanged. (#41)
+
 ## [0.26.1] — 2026-07-28
 
 ### Fixed
