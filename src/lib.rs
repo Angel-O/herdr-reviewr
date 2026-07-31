@@ -102,7 +102,7 @@ pub fn run() -> Result<()> {
     // directory, ask herdr and rebuild from the directory it names. Nothing user-held
     // exists yet — the rebuild happens before the first load — and a wedged herdr
     // degrades this pane to the defaults instead of holding herdr's blank grid
-    // (issue #4, `specs/config.md` Failure semantics). A slow answer paints its note
+    // (issue #4, `specs/config.md` The file). A slow answer paints its note
     // first, so the config swap is never a silent stale-then-swap; a fast one shows
     // nothing (`policies/ux-responsiveness.md`).
     let cli_dir = cfg

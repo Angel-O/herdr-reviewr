@@ -36,7 +36,7 @@ The runtime is a single-threaded frame loop (`event_loop` in `src/lib.rs`): draw
 - `src/turn.rs` — the pure turn state machine: a resting→working edge starts a turn, and a pending candidate promotes to the `last-turn` baseline once the worktree diverges from it. The world worker's `TurnHost` drives it; `src/herdr.rs` holds the herdr CLI calls.
 - `src/model.rs` — `CommentStore` (in-memory), comment anchoring (`diff_anchored` distinguishes diff comments from All-files content comments — each renders only in its own view).
 - `src/export.rs` — comment export: format all, send via `herdr agent send` or clipboard, consume-on-success only.
-- `src/config.rs` — plugin config: the whole file validates before every frame/action (invariants C1–C8 in specs/config.md). An invalid config blocks all review work until recovery, which carries authored state.
+- `src/config.rs` — plugin config: the whole file validates before every frame/action (the `CFG-*` invariants in specs/config.md). An invalid config blocks all review work until recovery, which carries authored state.
 - `herdr-plugin.toml` + `herdr/pane.sh` — plugin packaging: pane, toggle/open/close actions, worktree.created auto-open.
 
 ## QA install — putting a local build into the user's herdr panes
