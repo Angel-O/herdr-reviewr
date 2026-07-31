@@ -386,9 +386,8 @@ That pane is a full reviewr pane. It reads your config, sends to agents, tracks 
 toggle closes it. The install links the binary at `~/.local/bin/herdr-reviewr` when that
 directory exists, and always at
 `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path if
-`~/.local/bin` is not on your `PATH`. The links come from `herdr plugin install` — a
-`herdr plugin link` dev checkout does not create or update them, so point a layout at your own
-build directly while developing.
+`~/.local/bin` is not on your `PATH`. The install creates both links, and every toggle, open,
+or close re-points them at the live plugin — linked dev checkouts included.
 
 A layout hook can also invoke the actions, once its panes are in place:
 

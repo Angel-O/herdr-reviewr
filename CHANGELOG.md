@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.1] — 2026-07-31
+
+### Fixed
+- **The stable launch paths now survive the install.** The installer's build step runs in a
+  staging checkout that herdr renames afterwards, so the `~/.local/bin/herdr-reviewr` and
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` links pointed at a
+  directory that no longer existed. Every toggle, open, close, or auto-open now re-points
+  both links at the live plugin root, and the installer aims them at the runtime root when
+  herdr provides one.
+
 ## [0.27.0] — 2026-07-31
 
 ### Added

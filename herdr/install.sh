@@ -73,10 +73,13 @@ echo "$NAME: installed $BIN_DIR/$NAME"
 # root moves — but anything else at the path is left alone: a user's own binary there
 # (`cargo install --root ~/.local`) must survive, and `ln -sfn` onto a real directory
 # would nest inside it. The binary is already installed, so a skipped or failed link
-# warns without failing the install.
+# warns without failing the install. This build may run in a staging checkout herdr
+# renames afterwards, so the links aim at the runtime root when herdr provides one, and
+# every action re-points them at the live root regardless (herdr/pane.sh).
+LINK_ROOT="${HERDR_PLUGIN_ROOT:-$ROOT}"
 link_binary() {
   if mkdir -p "$1" 2>/dev/null && { [ -L "$1/$NAME" ] || [ ! -e "$1/$NAME" ]; } &&
-    ln -sfn "$BIN_DIR/$NAME" "$1/$NAME" 2>/dev/null; then
+    ln -sfn "$LINK_ROOT/bin/$NAME" "$1/$NAME" 2>/dev/null; then
     echo "$NAME: linked $1/$NAME"
   else
     echo "$NAME: warning: could not link $1/$NAME" >&2

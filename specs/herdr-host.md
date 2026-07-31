@@ -30,7 +30,7 @@ The review run labels its pane `reviewr` when the pane has no label, and a norma
 
 ## Install paths
 
-The install step links the binary at a stable path, `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`, and at `~/.local/bin/herdr-reviewr` when that directory exists. Both paths are links into the installed plugin, never copies. An install re-points both. A launch after an uninstall fails rather than running a stale build.
+The plugin keeps the binary linked at a stable path, `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`, and at `~/.local/bin/herdr-reviewr` when that directory exists. The install step creates both, and every action and event re-points them at the live plugin root — the install's build step runs in a staging checkout the host renames afterwards, so only a runtime invocation knows the real root. Both paths are links into the installed plugin, never copies, and neither ever replaces anything but a symlink. A launch after an uninstall fails rather than running a stale build.
 
 ## Pane actions
 

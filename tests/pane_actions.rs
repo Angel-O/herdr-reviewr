@@ -325,6 +325,53 @@ fn a_gone_pane_skips_and_an_unreadable_read_refuses() {
 }
 
 #[test]
+fn an_action_repoints_the_stable_launch_paths_at_the_live_plugin_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, _log) = fake_herdr(dir.path());
+    // The install's build step runs in a staging checkout herdr renames afterwards, so the
+    // actions own the stable links: every valid invocation re-points them at the runtime
+    // root (specs/herdr-host.md, Install paths). `~/.local/bin` only when it exists.
+    let home = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join("bin")).unwrap();
+    fs::write(root.path().join("bin/herdr-reviewr"), "#!/bin/sh\n").unwrap();
+    let mut permissions =
+        fs::metadata(root.path().join("bin/herdr-reviewr")).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(root.path().join("bin/herdr-reviewr"), permissions).unwrap();
+    let run_close = |home: &Path| {
+        Command::new("bash")
+            .arg("herdr/pane.sh")
+            .arg("close")
+            .env("HERDR_REVIEWR_BIN", reviewr_bin())
+            .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
+            .env("HERDR_BIN_PATH", &herdr)
+            .env("HERDR_WORKSPACE_ID", "workspace-1")
+            .env("HERDR_PLUGIN_ROOT", root.path())
+            .env("HOME", home)
+            .output()
+            .unwrap()
+    };
+
+    let output = run_close(home.path());
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let state_link =
+        home.path().join(".local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr");
+    assert_eq!(fs::read_link(&state_link).unwrap(), root.path().join("bin/herdr-reviewr"));
+    let bin_link = home.path().join(".local/bin/herdr-reviewr");
+    assert!(!bin_link.exists(), "~/.local/bin must not be created for the link");
+
+    // With `~/.local/bin` present, the second link lands too — and an existing symlink
+    // re-points rather than blocks.
+    fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink("/nonexistent/old", &bin_link).unwrap();
+    let output = run_close(home.path());
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(fs::read_link(&bin_link).unwrap(), root.path().join("bin/herdr-reviewr"));
+}
+
+#[test]
 fn a_process_info_answer_missing_its_shape_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let (herdr, _log) = fake_herdr(dir.path());

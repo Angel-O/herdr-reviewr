@@ -48,6 +48,22 @@ placement=$(cfg_field toggle_placement) || unreadable_config
 direction=$(cfg_field toggle_direction) || unreadable_config
 auto_open=$(cfg_field auto_open) || unreadable_config
 
+# The stable launch paths track the live plugin root from here, not from the install step:
+# the build step runs in a staging checkout that herdr renames afterwards, so only a runtime
+# invocation knows the real root (specs/herdr-host.md, Install paths). Best effort — never
+# fails an action, and never replaces anything but a symlink.
+if [ -n "${HERDR_PLUGIN_ROOT:-}" ] && [ -x "$HERDR_PLUGIN_ROOT/bin/herdr-reviewr" ]; then
+  for link_dir in "$HOME/.local/state/herdr/plugins/persiyanov.reviewr/bin" "$HOME/.local/bin"; do
+    if [ "$link_dir" = "$HOME/.local/bin" ] && [ ! -d "$link_dir" ]; then
+      continue
+    fi
+    mkdir -p "$link_dir" 2>/dev/null || continue
+    if [ -L "$link_dir/herdr-reviewr" ] || [ ! -e "$link_dir/herdr-reviewr" ]; then
+      ln -sfn "$HERDR_PLUGIN_ROOT/bin/herdr-reviewr" "$link_dir/herdr-reviewr" 2>/dev/null || :
+    fi
+  done
+fi
+
 # Event policy gates the event alone: explicit actions ignore it. This is after validation but
 # before workspace or pane inspection, so a disabled event performs no normal work.
 if [ "$mode" = auto-open ]; then
