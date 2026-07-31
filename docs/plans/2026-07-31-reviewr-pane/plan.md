@@ -21,7 +21,7 @@ Any pane that runs the binary is a full reviewr pane: `command = "herdr-reviewr"
 - [x] No `sidebar` remains in code, manifest, scripts, README, or AGENTS.md. Action ids `toggle`/`open`/`close` are unchanged.
 - [x] `docs/herdr-api-notes.md` records the surface verified 2026-07-31: plain-pane env (`HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`), `pane process-info` (foreground `name`/`argv`), `pane rename` (incl. `--clear`), `pane split`/`run`/`current`, `plugin config-dir`.
 - [x] README's layout section shows the `command = "herdr-reviewr"` recipe with the stable path as fallback.
-- [ ] Release published, #20 answered with the recipe and closed.
+- [x] Release published, #20 answered with the recipe and closed.
 
 ## Out of Scope
 
@@ -36,7 +36,7 @@ Any pane that runs the binary is a full reviewr pane: `command = "herdr-reviewr"
 4. [x] Installer links (`herdr/install.sh`): after installing into `bin/`, `ln -sf` the two stable paths, `~/.local/bin` only when the directory exists.
 5. [x] Actions rework and rename sweep: `herdr/sidebar.sh` → `herdr/pane.sh`, matching panes by `pane list` plus `pane process-info` per pane instead of by label; manifest entrypoint id `sidebar` → `pane` plus action titles ("reviewr: toggle pane"); `sidebar` identifiers and comments in `src/`, `justfile:27`, `docs/qa-install.md`, `AGENTS.md`, README.
 6. [x] Docs: refresh `docs/herdr-api-notes.md`, rewrite README's "Auto-open and layout plugins" section around the recipe.
-7. [ ] Merge gate, then release per `docs/RELEASING.md` (minor bump: new user-facing capability), then reply on #20.
+7. [x] Merge gate, then release per `docs/RELEASING.md` (minor bump: new user-facing capability), then reply on #20.
 
 ## Likely Files
 
