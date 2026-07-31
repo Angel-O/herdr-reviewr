@@ -1,9 +1,9 @@
 [package]
 name = "herdr-reviewr"
-version = "0.26.2"
+version = "0.27.0"
 edition = "2024"
 rust-version = "1.97"
-description = "A herdr-native review sidebar: browse an agent's changes and send comments back to chat, in the terminal."
+description = "A terminal review pane for herdr: browse an agent's changes and send comments back to chat."
 authors = ["Dmitry Persiyanov <dmitry.persiyanov@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/persiyanov/herdr-reviewr"
