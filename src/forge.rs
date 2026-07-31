@@ -818,7 +818,7 @@ fn newest_by(prs: &[AssocPr], key: impl Fn(&AssocPr) -> &str) -> Option<u64> {
 
 /// All of one PR's state in a single direct GraphQL call — identity, mergeability, checks,
 /// reviews, plain comments, and review threads. Each list surface reads its newest 100 rows
-/// (`last:100`, flagged by `hasPreviousPage`) — ample for any real PR in a review sidebar —
+/// (`last:100`, flagged by `hasPreviousPage`) — ample for any real PR in a review pane —
 /// and flags a fuller surface so the UI can mark it, rather than paging to exhaustion
 /// (`specs/forge-host.md`). Checks keep `first:100`/`hasNextPage`.
 fn pr_detail(target: &FetchTarget<'_>, number: u64) -> Result<Value, GhError> {

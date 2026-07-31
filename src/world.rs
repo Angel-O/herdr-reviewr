@@ -122,7 +122,7 @@ pub(crate) fn all_files_entries(
 
 /// Turn tracking, owned by the worker: the sample, the snapshot capture, and the baseline
 /// promotion happen on one thread, so the snapshot always rides the sample that observed the
-/// edge (specs/herdr-host.md). The baseline ref stays the sidebar's only git write.
+/// edge (specs/herdr-host.md). The baseline ref stays reviewr's only git write.
 #[derive(Debug)]
 pub struct TurnHost {
     tracker: TurnTracker,
@@ -186,7 +186,7 @@ fn classify(
 
 impl TurnHost {
     /// Resume any persisted turn baseline for this worktree, so `last-turn` keeps its
-    /// anchor across a sidebar restart (specs/herdr-host.md).
+    /// anchor across a reviewr pane restart (specs/herdr-host.md).
     /// `repo` must already be the git top level, as [`crate::world::seed_baseline`] and
     /// membership both compare against it and `App` derives the same baseline-ref key from
     /// its own copy — normalizing here instead would key the two apart. `run` resolves it

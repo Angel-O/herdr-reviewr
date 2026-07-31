@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-31
+
+### Added
+- **Any pane running the binary is a full reviewr pane.** A layout plugin or a hand-typed
+  command launches reviewr with `command = "herdr-reviewr"` and gets the same pane the
+  toggle opens: the binary asks herdr for your plugin config when `HERDR_PLUGIN_CONFIG_DIR`
+  is not set, and the toggle, open, and close actions recognize every reviewr pane by its
+  foreground process instead of a label. The installer links the binary at the stable paths
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` and
+  `~/.local/bin/herdr-reviewr`, so layouts have a fixed command to name. (#20)
+
+### Changed
+- **The sidebar is now the pane.** The action titles read "reviewr: toggle/open/close pane",
+  and the docs follow. The keybindings and action ids are unchanged.
+
 ## [0.26.2] — 2026-07-29
 
 ### Fixed

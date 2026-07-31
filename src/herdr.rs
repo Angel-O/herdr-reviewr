@@ -1,15 +1,19 @@
-//! herdr host integration: resolve the agent pane to send to, and sample the agents turn
-//! tracking watches.
+//! herdr host integration: resolve the agent pane to send to, sample the agents turn
+//! tracking watches, ask herdr for the plugin config directory, and stamp/clear the
+//! pane's cosmetic `reviewr` label.
 //!
-//! See `specs/herdr-host.md`. Uses the herdr CLI via `$HERDR_BIN_PATH`. The two readers ask
-//! different questions and neither narrows the other: [`send_target`] resolves candidates
-//! from the sidebar's herdr workspace, while [`agent_samples`] reports every agent and lets
-//! the caller decide membership by worktree. Only these two depend on this module; browsing
-//! and the clipboard export do not.
+//! See `specs/herdr-host.md`. Uses the herdr CLI via `$HERDR_BIN_PATH`. The two agent readers
+//! ask different questions and neither narrows the other: [`send_target`] resolves candidates
+//! from the reviewr pane's herdr workspace, while [`agent_samples`] reports every agent and lets
+//! the caller decide membership by worktree. Browsing and the clipboard export never come
+//! through here.
 
 use std::collections::HashMap;
 use std::env;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crate::logln;
 use crate::turn::Status;
@@ -94,9 +98,136 @@ fn herdr(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The (workspace, pane) id pair identifying this sidebar in the herdr environment. There is
+/// How long a startup or exit path waits for a herdr answer before moving on. The call keeps
+/// running on its own thread — only the wait is bounded — so a wedged herdr costs at most
+/// this once and never wedges reviewr with it: not the first paint, not the event loop's
+/// entry, and not the shell prompt after exit.
+const ANSWER_BOUND: Duration = Duration::from_secs(2);
+
+/// How long a herdr answer may take before the caller signals the wait. Under this, the
+/// answer is effectively instant and nothing flashes; over it, the caller says what it is
+/// waiting on, so a slow answer never swaps the screen silently
+/// (`policies/ux-responsiveness.md`).
+const SIGNAL_DELAY: Duration = Duration::from_millis(150);
+
+/// Run a herdr subcommand on its own thread and hand back the channel its answer lands on.
+/// Dropping the receiver makes the call fire-and-forget; the thread still reaps the child
+/// either way, and a failure logs inside [`herdr`] as usual.
+fn herdr_on_thread(args: Vec<String>) -> mpsc::Receiver<Result<String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let _ = tx.send(herdr(&refs));
+    });
+    rx
+}
+
+/// Stamp our own pane's cosmetic `reviewr` label — but only when the pane carries no label,
+/// so a name the user gave their pane survives running reviewr in it (`specs/herdr-host.md`
+/// Pane identity: reviewr supplies the default name, never overrides one). Display only:
+/// the actions and the event identify a reviewr pane by its foreground process, never this
+/// label, so a failed read or write just logs — and nothing waits on it, so a hung herdr
+/// cannot sit between the first paint and the event loop. Without a pane id — outside
+/// herdr — a no-op.
+pub fn label_pane() {
+    let (Ok(ws), Ok(pane)) = (env::var("HERDR_WORKSPACE_ID"), env::var("HERDR_PANE_ID")) else {
+        return;
+    };
+    thread::spawn(move || {
+        // An unreadable listing stamps anyway: with herdr wedged the rename fails too,
+        // and both failures land in the log.
+        if current_label(&ws, &pane).is_none() {
+            let _ = herdr(&["pane", "rename", &pane, "reviewr"]);
+        }
+    });
+}
+
+/// Clear the cosmetic label on a normal exit — but only a `reviewr` label, so a name the
+/// user set is never deleted (`specs/herdr-host.md` Pane identity). The wait is bounded:
+/// this runs after the terminal is restored, and a hung herdr must not hold the shell
+/// prompt hostage for a label a stale copy of which changes nothing.
+pub fn clear_pane_label() {
+    let (Ok(ws), Ok(pane)) = (env::var("HERDR_WORKSPACE_ID"), env::var("HERDR_PANE_ID")) else {
+        return;
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        if current_label(&ws, &pane).as_deref() == Some("reviewr") {
+            let _ = herdr(&["pane", "rename", &pane, "--clear"]);
+        }
+        let _ = tx.send(());
+    });
+    if rx.recv_timeout(ANSWER_BOUND).is_err() {
+        logln!("pane label clear unanswered after {ANSWER_BOUND:?}; leaving the label");
+    }
+}
+
+/// Our pane's current label from `pane list`, or `None` when it has none or the listing
+/// fails. Blocking — the label threads call it, never the frame loop.
+fn current_label(ws: &str, pane: &str) -> Option<String> {
+    parse_pane_label(&herdr(&["pane", "list", "--workspace", ws]).ok()?, pane)
+}
+
+/// The `label` of pane `pane` in a `pane list` envelope. Absent key, empty label, unknown
+/// pane, and an unparseable envelope all read as no label.
+fn parse_pane_label(json: &str, pane: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Response {
+        result: PaneList,
+    }
+    #[derive(Deserialize)]
+    struct PaneList {
+        panes: Vec<PaneEntry>,
+    }
+    #[derive(Deserialize)]
+    struct PaneEntry {
+        pane_id: String,
+        #[serde(default)]
+        label: Option<String>,
+    }
+    let response: Response = serde_json::from_str(json).ok()?;
+    response
+        .result
+        .panes
+        .into_iter()
+        .find(|entry| entry.pane_id == pane)?
+        .label
+        .filter(|label| !label.is_empty())
+}
+
+/// The config directory herdr resolves for this plugin, from `herdr plugin config-dir`.
+/// `None` — herdr absent, refusing, or not answering — means no config directory, never an
+/// error (`specs/config.md`).
+pub fn plugin_config_dir() -> Option<String> {
+    plugin_config_dir_with(|| ())
+}
+
+/// [`plugin_config_dir`] with a slow-answer signal: `on_slow` runs once if the answer takes
+/// longer than [`SIGNAL_DELAY`], so the pane can say what it is waiting on instead of
+/// silently swapping a painted frame later. The pane calls this only after its first paint,
+/// and the total wait stays bounded by [`ANSWER_BOUND`], so a wedged herdr degrades a
+/// visible pane to the defaults instead of holding the blank grid issue #4 fixed.
+pub fn plugin_config_dir_with(on_slow: impl FnOnce()) -> Option<String> {
+    let rx =
+        herdr_on_thread(vec!["plugin".into(), "config-dir".into(), "persiyanov.reviewr".into()]);
+    let answer = if let Ok(answer) = rx.recv_timeout(SIGNAL_DELAY) {
+        answer
+    } else {
+        on_slow();
+        let Ok(answer) = rx.recv_timeout(ANSWER_BOUND.saturating_sub(SIGNAL_DELAY)) else {
+            logln!("plugin config-dir unanswered after {ANSWER_BOUND:?}; no config directory");
+            return None;
+        };
+        answer
+    };
+    let out = answer.ok()?;
+    let dir = out.trim();
+    (!dir.is_empty()).then(|| dir.to_owned())
+}
+
+/// The (workspace, pane) id pair identifying this reviewr pane in the herdr environment. There is
 /// no tab here on purpose: the send scopes to the workspace and turn tracking scopes to the
-/// worktree, so nothing reads `HERDR_TAB_ID` and the sidebar's placement changes neither.
+/// worktree, so nothing reads `HERDR_TAB_ID` and the reviewr pane's placement changes neither.
 fn agent_env() -> (Option<String>, Option<String>) {
     (env::var("HERDR_WORKSPACE_ID").ok(), env::var("HERDR_PANE_ID").ok())
 }
@@ -185,21 +316,6 @@ impl AgentPane {
     }
 }
 
-/// The pane the sidebar was opened beside, from the plugin context herdr puts in the pane's
-/// own environment. It can be absent, and it can name a pane that has since closed, so the
-/// caller treats it as one highlight candidate among others (`specs/herdr-host.md`).
-pub fn opened_beside() -> Option<String> {
-    let context = env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?;
-    let parsed: PluginContext = serde_json::from_str(&context).ok()?;
-    parsed.focused_pane_id
-}
-
-#[derive(Debug, Deserialize)]
-struct PluginContext {
-    #[serde(default)]
-    focused_pane_id: Option<String>,
-}
-
 /// Tab id to tab label for one workspace. Labelling is best effort: a failed call or a
 /// missing tab leaves the row's tab part empty rather than failing the send.
 fn tab_labels(ws: Option<&str>) -> HashMap<String, String> {
@@ -274,8 +390,8 @@ fn samples_of(agents: Vec<AgentPane>, me: Option<&str>) -> Vec<AgentSample> {
 
 /// The real agents in workspace `ws`, ignoring our own pane `me`. Only entries carrying an
 /// `agent` field count. herdr 0.7.5 already keeps non-agent panes
-/// out of `agent list`, so both filters are defensive: a plugin sidebar or a plain shell shows
-/// up in `pane list` with `agent: null` and never here (`../docs/herdr-api-notes.md`).
+/// out of `agent list`, so both filters are defensive: a reviewr pane or a plain shell shows
+/// up in `pane list` without an `agent` key and never here (`../docs/herdr-api-notes.md`).
 fn candidates<'a>(
     agents: &'a [AgentPane],
     ws: Option<&str>,
@@ -343,7 +459,7 @@ mod tests {
     }
 
     /// One non-agent pane as herdr 0.7.1 lists it live: `agent_status: unknown`, no `agent`
-    /// field — a plugin sidebar or a plain shell.
+    /// field — a reviewr pane or a plain shell.
     fn non_agent_pane(pane: &str, tab: &str, ws: &str) -> AgentPane {
         AgentPane {
             agent: None,
@@ -368,8 +484,8 @@ mod tests {
     #[test]
     fn sampling_keeps_every_tab_and_workspace() {
         // Turn tracking asks where an agent works, never where its pane sits, so neither the
-        // sidebar's tab nor its workspace narrows the sample (HH-TURN-PER-WORKTREE). This is
-        // what makes the `tab` placement track exactly like `split`.
+        // reviewr pane's tab nor its workspace narrows the sample (HH-TURN-PER-WORKTREE).
+        // This is what makes the `tab` placement track exactly like `split`.
         let agents = vec![
             AgentPane { cwd: Some("/w/one".into()), ..agent("w8:p1", "w8:t1", "w8") },
             AgentPane { cwd: Some("/w/two".into()), ..agent("w8:p2", "w8:t2", "w8") },
@@ -467,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn picker_rows_exclude_the_sidebar_and_every_non_agent_pane() {
+    fn picker_rows_exclude_our_own_pane_and_every_non_agent_pane() {
         // A shell and our own pane are not candidates, so neither becomes a row.
         let agents = vec![
             agent("w3:p1", "w3:t1", "w3"),
@@ -508,6 +624,18 @@ mod tests {
         // input splices one together across a removal.
         assert_eq!(super::pasted("a\x1b[201~b"), "\x1b[200~ab\x1b[201~");
         assert_eq!(super::pasted("a\x1b[201\x1b[201~~b"), "\x1b[200~ab\x1b[201~");
+    }
+
+    #[test]
+    fn a_pane_label_reads_only_our_pane_and_absent_or_empty_is_none() {
+        // The live `pane list` entry shape (docs/herdr-api-notes.md): `label` appears only
+        // on labeled panes. The label logic stamps the unlabeled and clears only its own.
+        let json = r#"{"result":{"panes":[{"pane_id":"w1:p1","label":"build"},{"pane_id":"w1:p2"},{"pane_id":"w1:p3","label":""}]}}"#;
+        assert_eq!(super::parse_pane_label(json, "w1:p1").as_deref(), Some("build"));
+        assert_eq!(super::parse_pane_label(json, "w1:p2"), None);
+        assert_eq!(super::parse_pane_label(json, "w1:p3"), None, "empty label reads as none");
+        assert_eq!(super::parse_pane_label(json, "w9:p9"), None, "unknown pane reads as none");
+        assert_eq!(super::parse_pane_label("[]", "w1:p1"), None, "junk envelope reads as none");
     }
 
     #[test]

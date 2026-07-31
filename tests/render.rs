@@ -80,7 +80,7 @@ fn composing(app: &mut App) {
 }
 
 #[test]
-fn invalid_config_replaces_the_entire_sidebar_with_its_error() {
+fn invalid_config_replaces_the_entire_pane_with_its_error() {
     let mut app = edited_app();
     app.set_config_error(
         "config /tmp/reviewr/config.toml: invalid value for `theme`; expected a built-in theme name"
@@ -92,7 +92,7 @@ fn invalid_config_replaces_the_entire_sidebar_with_its_error() {
     assert!(out.contains("config /tmp/reviewr/config.toml"));
     assert!(out.contains("expected a built-in theme name"));
     assert!(out.contains("The config reloads automatically."));
-    assert!(!out.contains("Changes"), "normal sidebar chrome must be hidden");
+    assert!(!out.contains("Changes"), "normal reviewr chrome must be hidden");
 }
 
 #[test]
@@ -515,14 +515,14 @@ fn a_status_too_long_to_paint_never_costs_the_row_the_actions_that_fit() {
 }
 
 #[test]
-fn the_footer_shows_the_sends_outcome_at_a_sidebar_width_by_yielding_the_cursor_actions() {
+fn the_footer_shows_the_sends_outcome_at_a_pane_width_by_yielding_the_cursor_actions() {
     let mut app = edited_app();
     on_changed_line(&mut app);
     app.start_comment();
     app.input_push('n');
     app.submit_comment(); // a written comment adds `s send 1` to row 1
 
-    // The status is the only answer `s` gives, and a reviewr sidebar is around 40 columns wide, so
+    // The status is the only answer `s` gives, and a reviewr pane is around 40 columns wide, so
     // the cursor's actions yield to it: the `?` panel repeats every action and nothing repeats the
     // status (`specs/input.md`).
     app.status = "no agent here — copy to the clipboard instead".to_string();
@@ -1193,7 +1193,7 @@ fn a_narrow_overflowing_header_does_not_mis_map_a_click_to_send() {
     r.write("a.rs", "y\n");
     let app = app_on(&r);
 
-    // At a narrow sidebar width the two-tab header overflows and the Send button is off-screen.
+    // At a narrow pane width the two-tab header overflows and the Send button is off-screen.
     // No on-screen column may map to Send — the old right-aligned hit-zone landed a phantom Send
     // over the chip/tab region, swallowing those clicks as a Send.
     let width: u16 = 34;
@@ -2555,14 +2555,11 @@ fn picker_app() -> App {
     for text in ["one", "two", "three"] {
         write_comment(&mut app, text);
     }
-    app.open_picker(
-        vec![
-            agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
-            agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
-            agent_row("w8:p3", "codex", "working", "3"),
-        ],
-        None,
-    );
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
+        agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
+        agent_row("w8:p3", "codex", "working", "3"),
+    ]);
     app
 }
 
@@ -2573,13 +2570,10 @@ fn the_last_sent_row_carries_its_tag_and_no_other_row_does() {
     // A prior send to release-bot arms the highlight there and tags the row, so the
     // remembered default reads before `enter` fires it (specs/herdr-host.md).
     app.last_sent_pane = Some("w8:p2".to_string());
-    app.open_picker(
-        vec![
-            agent_row("w8:p1", "claude", "idle", "1"),
-            agent_row("w8:p2", "release-bot", "idle", "2"),
-        ],
-        None,
-    );
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "1"),
+        agent_row("w8:p2", "release-bot", "idle", "2"),
+    ]);
     assert_eq!(app.picker_cursor, 1, "the highlight arms on the last-sent agent");
     let out = render(&app);
 
@@ -2594,10 +2588,10 @@ fn an_open_picker_dims_the_view_behind_it_but_never_the_footer() {
     let mut app = edited_app();
     write_comment(&mut app, "one");
     let plain = render_buffer(&app);
-    app.open_picker(
-        vec![agent_row("w8:p1", "claude", "idle", "1"), agent_row("w8:p2", "codex", "idle", "2")],
-        None,
-    );
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "1"),
+        agent_row("w8:p2", "codex", "idle", "2"),
+    ]);
     let dimmed = render_buffer(&app);
 
     // The tab bar recedes toward the theme base while the picker is up (specs/tui.md).
@@ -2639,7 +2633,7 @@ fn neither_popup_reaches_the_footer_that_advertises_its_keys() {
         app.open_list();
         let listed = dump(&render_size(&app, 44, h));
         app.close_list();
-        app.open_picker(rows.clone(), None);
+        app.open_picker(rows.clone());
         let picked = dump(&render_size(&app, 44, h));
         app.close_picker();
 
@@ -2685,7 +2679,7 @@ fn the_picker_numbers_only_the_rows_a_digit_key_can_reach() {
     let rows: Vec<AgentChoice> = (1..=11)
         .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
         .collect();
-    app.open_picker(rows, None);
+    app.open_picker(rows);
     let out = render(&app);
 
     for i in 1..=9 {
@@ -2704,7 +2698,7 @@ fn a_picker_taller_than_the_pane_scrolls_to_keep_the_highlight_visible() {
     let rows: Vec<AgentChoice> = (1..=20)
         .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
         .collect();
-    app.open_picker(rows, None);
+    app.open_picker(rows);
 
     // A short frame cannot show twenty rows; the last one is still reachable.
     let short = dump(&render_size(&app, 80, 12));

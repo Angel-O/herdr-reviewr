@@ -592,14 +592,14 @@ impl App {
         Self::build(repo, scope, base, true)
     }
 
-    /// Construct the error-only sidebar without reading repository state.
+    /// Construct the error-only reviewr pane without reading repository state.
     pub(crate) fn blocked(repo: PathBuf, scope: Scope, base: Option<String>) -> Self {
         Self::build(repo, scope, base, false)
     }
 
     fn build(repo: PathBuf, scope: Scope, base: Option<String>, load_turn: bool) -> Self {
         // Mirror any persisted turn baseline for this worktree, so `last-turn` keeps its
-        // anchor across a sidebar restart. The worker's `TurnHost` owns the tracker; this
+        // anchor across a reviewr pane restart. The worker's `TurnHost` owns the tracker; this
         // mirror follows its completions (specs/herdr-host.md).
         let turn_baseline = if load_turn { crate::world::seed_baseline(&repo) } else { None };
         let theme = theme::resolve(None);
@@ -734,7 +734,7 @@ impl App {
         }
     }
 
-    /// Block the sidebar on one whole-file configuration failure.
+    /// Block the reviewr pane on one whole-file configuration failure.
     pub fn set_config_error(&mut self, error: String) {
         self.cancel_divider_drag();
         // The search overlay, the find band, and the agent picker close when the config view
@@ -3352,11 +3352,10 @@ impl App {
 }
 
 /// The row the picker's highlight opens on: the agent this session sent to last, else the
-/// pane the sidebar was opened beside, else the first row. Each level is skipped unless it is
-/// still a candidate, so a closed pane falls through (`specs/herdr-host.md`).
-fn armed_row(rows: &[AgentChoice], last_sent: Option<&str>, beside: Option<&str>) -> usize {
-    let row_of = |pane: &str| rows.iter().position(|row| row.pane_id == pane);
-    last_sent.and_then(row_of).or_else(|| beside.and_then(row_of)).unwrap_or(0)
+/// first row. The last-sent agent counts only while it is still a candidate, so a closed
+/// pane falls through (`specs/herdr-host.md`).
+fn armed_row(rows: &[AgentChoice], last_sent: Option<&str>) -> usize {
+    last_sent.and_then(|pane| rows.iter().position(|row| row.pane_id == pane)).unwrap_or(0)
 }
 
 impl App {
@@ -3371,18 +3370,16 @@ impl App {
         }
         match herdr::send_target() {
             Ok(SendTarget::One(agent)) => self.export_to_agent(&agent),
-            Ok(SendTarget::Many(rows)) => self.open_picker(rows, herdr::opened_beside().as_deref()),
+            Ok(SendTarget::Many(rows)) => self.open_picker(rows),
             // The refusal is already a whole sentence naming the cause and the clipboard, so a
             // prefix would only spend the width the footer needs to show it.
             Err(e) => self.status = e.to_string(),
         }
     }
 
-    /// Open the picker over `rows`, arming the highlight on the first row that is still a
-    /// candidate: the agent this session sent to last, else the `beside` pane the sidebar was
-    /// opened next to, else the first row (`specs/herdr-host.md`). `beside` is a parameter so
-    /// the environment is read once at the send boundary, never ambiently.
-    pub fn open_picker(&mut self, rows: Vec<AgentChoice>, beside: Option<&str>) {
+    /// Open the picker over `rows`, arming the highlight on the agent this session sent to
+    /// last when it is still a candidate, else the first row (`specs/herdr-host.md`).
+    pub fn open_picker(&mut self, rows: Vec<AgentChoice>) {
         // A picker with no rows has nothing to choose and no `enter` that acts, and a second open
         // over a live one would capture `Picker` as the mode to restore — either way a modal that
         // swallows every key and that one `esc` cannot leave. The frozen row set also outranks a
@@ -3390,7 +3387,7 @@ impl App {
         if rows.is_empty() || self.mode == Mode::Picker {
             return;
         }
-        self.picker_cursor = armed_row(&rows, self.last_sent_pane.as_deref(), beside);
+        self.picker_cursor = armed_row(&rows, self.last_sent_pane.as_deref());
         self.picker_rows = rows;
         self.picker_over = self.mode.clone();
         self.mode = Mode::Picker;

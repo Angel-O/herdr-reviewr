@@ -42,7 +42,7 @@ fn write_fake_herdr(dir: &Path) -> PathBuf {
          echo \"$@\" >> \"$dir/log\"\n\
          case \"$*\" in\n\
            $(cat \"$dir/fail\" 2>/dev/null || echo __none__)*)\n\
-             echo '{\"error\":{\"code\":\"pane_not_found\",\"message\":\"pane w8:p2 not found\"},\"id\":\"cli:request\"}' >&2\n\
+             echo '{\"error\":{\"code\":\"pane_not_found\",\"message\":\"pane w8:p1 not found\"},\"id\":\"cli:request\"}' >&2\n\
              exit 1 ;;\n\
          esac\n\
          case \"$1 $2\" in\n\
@@ -101,8 +101,6 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
             .env("HERDR_BIN_PATH", &script)
             .env("HERDR_WORKSPACE_ID", "w8")
             .env("HERDR_PANE_ID", "w8:p9")
-            // The pane the sidebar was opened beside, level 2 of the highlight's arming ladder.
-            .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"focused_pane_id":"w8:p2"}"#)
             .output()
             .expect("re-exec the test with the fake herdr env");
         assert!(
@@ -133,18 +131,18 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     let mut app = app_on(&r);
 
     // Several agents: `s` opens the picker over both rows, labelled from `tab list`, and with
-    // nothing sent yet the highlight arms on the pane the sidebar was opened beside.
+    // nothing sent yet the highlight arms on the first row (`specs/herdr-host.md`).
     fs::write(fake_dir.join("agents.json"), TWO_AGENTS).unwrap();
     write_comment(&mut app, "one");
     press(&mut app, KeyCode::Char('s'), area, &keymap);
     assert_eq!(app.mode, Mode::Picker, "several agents open the picker");
     assert_eq!(app.picker_rows.len(), 2);
     assert_eq!(app.picker_rows[0].tab, "Grip", "the tab label joins on tab_id");
-    assert_eq!(app.picker_cursor, 1, "`focused_pane_id` arms the pane opened beside");
+    assert_eq!(app.picker_cursor, 0, "nothing sent this session arms the first row");
 
     // A chosen pane that closed while the picker was open fails the send, and every comment
     // stays. Nothing arms, since nothing was delivered (specs/herdr-host.md).
-    fail_on(&fake_dir, "pane send-text w8:p2");
+    fail_on(&fake_dir, "pane send-text w8:p1");
     press(&mut app, KeyCode::Enter, area, &keymap);
     assert_eq!(app.mode, Mode::Normal, "the picker closes whatever the outcome");
     assert_eq!(app.store.len(), 1, "a failed send keeps every comment");
@@ -155,48 +153,50 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     assert_eq!(app.last_sent_pane, None, "a failed send arms nothing");
     fail_on_nothing(&fake_dir);
 
-    // `enter` sends to the highlighted agent and consumes the set.
+    // One agent: `s` sends straight through, no picker frame in between — and the direct
+    // send arms its agent like a picker send.
+    fs::write(fake_dir.join("agents.json"), ONE_AGENT).unwrap();
     press(&mut app, KeyCode::Char('s'), area, &keymap);
-    press(&mut app, KeyCode::Char('1'), area, &keymap);
-    press(&mut app, KeyCode::Enter, area, &keymap);
-    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.mode, Mode::Normal, "one agent sends directly");
     assert!(app.store.is_empty(), "a successful send consumes the whole set");
     assert_eq!(app.status, "added 1 comment to claude");
     assert_eq!(app.last_sent_pane.as_deref(), Some("w8:p1"));
-    assert!(log(&fake_dir).contains("pane send-text w8:p1"), "log: {}", log(&fake_dir));
+
+    // `enter` sends to the digit-selected agent and consumes the set.
+    fs::write(fake_dir.join("agents.json"), TWO_AGENTS).unwrap();
+    write_comment(&mut app, "two");
+    press(&mut app, KeyCode::Char('s'), area, &keymap);
+    press(&mut app, KeyCode::Char('2'), area, &keymap);
+    press(&mut app, KeyCode::Enter, area, &keymap);
+    assert_eq!(app.mode, Mode::Normal);
+    assert!(app.store.is_empty(), "a successful send consumes the whole set");
+    assert_eq!(app.status, "added 1 comment to codex");
+    assert_eq!(app.last_sent_pane.as_deref(), Some("w8:p2"));
+    assert!(log(&fake_dir).contains("pane send-text w8:p2"), "log: {}", log(&fake_dir));
     // The start marker opens the payload at the CLI boundary; `pasted()` owns the rationale.
     assert!(
-        log(&fake_dir).contains("pane send-text w8:p1 \u{1b}[200~"),
+        log(&fake_dir).contains("pane send-text w8:p2 \u{1b}[200~"),
         "the send is framed as a bracketed paste: {}",
         log(&fake_dir)
     );
-    // The batch's last bytes are the comment text "one", so this pins the terminator to the
+    // The batch's last bytes are the comment text "two", so this pins the terminator to the
     // end of a delivered payload.
     assert!(
-        log(&fake_dir).contains("one\u{1b}[201~"),
+        log(&fake_dir).contains("two\u{1b}[201~"),
         "the frame terminator closes the batch: {}",
         log(&fake_dir)
     );
-    assert!(log(&fake_dir).contains("agent focus w8:p1"), "a send focuses its pane");
+    assert!(log(&fake_dir).contains("agent focus w8:p2"), "a send focuses its pane");
 
-    // One agent: `s` sends straight through, no picker frame in between.
-    fs::write(fake_dir.join("agents.json"), ONE_AGENT).unwrap();
-    write_comment(&mut app, "two");
-    press(&mut app, KeyCode::Char('s'), area, &keymap);
-    assert_eq!(app.mode, Mode::Normal, "one agent sends directly");
-    assert!(app.store.is_empty());
-    assert_eq!(app.status, "added 1 comment to claude");
-
-    // Several again: the last-sent agent outranks the pane opened beside, and a first click on
-    // that armed row sends immediately (specs/input.md).
-    fs::write(fake_dir.join("agents.json"), TWO_AGENTS).unwrap();
+    // Several again: the last-sent agent outranks the first row, and a first click on that
+    // armed row sends immediately (specs/input.md).
     write_comment(&mut app, "three");
     press(&mut app, KeyCode::Char('s'), area, &keymap);
     assert_eq!(app.mode, Mode::Picker);
-    assert_eq!(app.picker_cursor, 0, "the last-sent agent outranks the one opened beside");
+    assert_eq!(app.picker_cursor, 1, "the last-sent agent outranks the first row");
     let (col, row) = (0..area.height)
         .flat_map(|y| (0..area.width).map(move |x| (x, y)))
-        .find(|&(x, y)| ui::hit_picker_row(area, &app, x, y) == Some(0))
+        .find(|&(x, y)| ui::hit_picker_row(area, &app, x, y) == Some(1))
         .expect("the armed row is clickable");
     handle_mouse(
         &mut app,
@@ -213,8 +213,13 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     .unwrap();
     assert_eq!(app.mode, Mode::Normal, "a first click on the armed row sends");
     assert!(app.store.is_empty());
-    let sends = log(&fake_dir).matches("pane send-text w8:p1").count();
-    assert_eq!(sends, 3, "three sends addressed the same pane: {}", log(&fake_dir));
+    let sends = log(&fake_dir).matches("pane send-text w8:p2").count();
+    assert_eq!(
+        sends,
+        2,
+        "the digit-selected send and the armed-row click addressed the same pane: {}",
+        log(&fake_dir)
+    );
 
     // No agent, and an enumeration herdr never answered, both refuse and name the clipboard —
     // and neither opens a picker.

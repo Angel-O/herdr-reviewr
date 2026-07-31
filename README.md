@@ -8,7 +8,7 @@
   <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="#controls">controls</a> · <a href="#diff-scopes">scopes</a> · <a href="#configuration">configuration</a> · <a href="#limitations">limitations</a> · <a href="CHANGELOG.md">changelog</a>
 </p>
 
-A code-review sidebar for [herdr](https://herdr.dev). Your agent writes the code. You read its
+A code-review pane for [herdr](https://herdr.dev). Your agent writes the code. You read its
 diff in a pane beside the chat, comment on the lines, and send the notes back. You never leave
 the terminal.
 
@@ -32,7 +32,7 @@ never posts.
 
 ## Requirements
 
-- **herdr ≥ 0.7.0** (the plugin system).
+- **herdr ≥ 0.7.5** (the plugin system).
 - **git** on `PATH`.
 - A **truecolor** terminal with Unicode box-drawing.
 - **macOS or Linux.**
@@ -73,7 +73,7 @@ Everything works except **Send** and the **last turn** scope. Those need herdr a
 
 ## Quick start
 
-Open the sidebar next to your agent:
+Open reviewr next to your agent:
 
 1. **Pick a file.** Changed files are in the navigator. `j` / `k` moves, the diff follows. Or
    `]` walks the changes hunk by hunk, file after file.
@@ -179,7 +179,7 @@ opens in your browser (`http`/`https` only), and an anchor link jumps to its hea
 - **last turn** — everything that changed in this worktree since its most recent turn started
   ([Limitations](#limitations)).
 
-The sidebar starts in **uncommitted**. `default_scope` changes that. Switching with `u`/`b`/`t`
+reviewr starts in **uncommitted**. `default_scope` changes that. Switching with `u`/`b`/`t`
 wins for the rest of the session.
 
 Every scope respects `.gitignore`, so build output never clutters **Changes**. To review a file,
@@ -224,7 +224,7 @@ select  = ["v", "ㅍ"]
 ```
 
 A missing file or omitted key uses its default. Any unknown key, wrong type, or invalid value
-makes the whole file invalid. reviewr never applies the valid-looking parts. The sidebar shows
+makes the whole file invalid. reviewr never applies the valid-looking parts. The pane shows
 the config error until you fix the file, then recovers on its next refresh. Replace the file
 atomically if your editor might expose a partial save.
 
@@ -344,7 +344,7 @@ aliases like `github.com-work`. Use a canonical-host remote or an `insteadOf` re
 Authenticate with `gh auth login --hostname github.example.com`,
 `glab auth login --hostname git.corp.example`, or `az login`.
 
-### Sidebar placement
+### Pane placement
 
 The toggle opens reviewr as a split to the right of your agent. `toggle_placement` changes the
 shape:
@@ -376,19 +376,32 @@ Set this when another plugin arranges your new worktrees, like
 the same worktree event and race. With auto-open off, the layout builds undisturbed and your
 toggle opens reviewr on top.
 
-A layout can also open reviewr itself, once its panes are in place:
+A layout places reviewr like any other program. Give one pane the command:
+
+```toml
+command = "herdr-reviewr"
+```
+
+That pane is a full reviewr pane. It reads your config, sends to agents, tracks turns, and the
+toggle closes it. The install links the binary at `~/.local/bin/herdr-reviewr` when that
+directory exists, and always at
+`~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path if
+`~/.local/bin` is not on your `PATH`. The links come from `herdr plugin install` — a
+`herdr plugin link` dev checkout does not create or update them, so point a layout at your own
+build directly while developing.
+
+A layout hook can also invoke the actions, once its panes are in place:
 
 ```bash
 herdr plugin action invoke open --plugin persiyanov.reviewr
 ```
 
-`open` ignores `auto_open`. An explicit call is you asking. It does nothing when a sidebar is
-already open, so a layout can run it on every pass. `close` does nothing when none is open.
-Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`.
-
-The action targets the focused workspace, so invoke it while the new workspace has focus.
-It also opens reviewr as its own new pane, so run the invoke as a one-shot from your layout
-hook. A pane whose command is the invoke exits when the invoke returns.
+`open` ignores `auto_open`. An explicit call is you asking. It does nothing when a reviewr pane
+is already open, so a layout can run it on every pass. `close` does nothing when none is open.
+Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`. The action targets the
+focused workspace, so invoke it while the new workspace has focus. Put `herdr-reviewr` itself in
+a layout pane, never the invoke. A pane whose command is the invoke exits when the invoke
+returns.
 
 ## Limitations
 
@@ -433,8 +446,9 @@ The known constraints:
   per-comment send, no duplicate delivery, and a failure leaves everything in place.
 - **No line-number rebasing** — a comment stays locatable by its diff snippet, not its line
   number. reviewr flags a stale comment instead of dropping it.
-- **One sidebar per worktree** — two on the same worktree race the baseline ref, and the last
-  writer wins.
+- **Two panes on one worktree drift a little** — they agree on turn boundaries, but each
+  snapshots on its own poll clock, so their last-turn baselines can differ by the edits made
+  between the two samples.
 
 **Budgets**
 - Files over 2 MB or 50,000 lines show a "too large" notice. Binary files get no diff.
@@ -452,7 +466,7 @@ just install   # build release → bin/herdr-reviewr, ad-hoc re-signed on macOS
 herdr plugin link .
 ```
 
-After every `just install`, toggle the sidebar off and on. An open pane keeps running the old
+After every `just install`, toggle the reviewr pane off and on. An open pane keeps running the old
 process. The loop only works while the plugin is linked: a `github:…` source in
 `herdr plugin list` runs a downloaded binary that local rebuilds never touch. Switch with:
 

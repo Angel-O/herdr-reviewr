@@ -363,8 +363,9 @@ fn a_resting_pointer_keeps_the_arm_but_a_gesture_drops_it() {
     app.next_hunk();
     assert_eq!(app.armed_cross(), Some(true), "armed at a.rs's last hunk");
 
-    // Mouse capture reports every pointer move over the pane. A pointer resting on the sidebar
-    // is not an input the reviewer made, so it must not drop the crossing they armed.
+    // Mouse capture reports every pointer move over the pane. A pointer resting on the
+    // reviewr pane is not an input the reviewer made, so it must not drop the crossing
+    // they armed.
     mouse(&mut app, &keymap, MouseEventKind::Moved);
     assert_eq!(app.armed_cross(), Some(true), "pointer motion is not a gesture");
 
@@ -2166,7 +2167,7 @@ fn the_baseline_survives_a_restart() {
         r.write("a.rs", "one\ntwo\n");
         observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // promotes and persists the ref
     }
-    // A fresh App — a sidebar restart — resumes the persisted baseline. It reads the ref by
+    // A fresh App — a reviewr pane restart — resumes the persisted baseline. It reads the ref by
     // the same key the host wrote it under, which is why both resolve the repo the one way.
     let (mut restarted, _) = turn_setup(&r);
     restarted.reload().unwrap();
@@ -2356,7 +2357,7 @@ fn a_failed_enumeration_keeps_the_previous_membership() {
     let (mut app, mut host) = turn_setup(&r);
 
     // A hiccup before any poll has ever succeeded observed nothing, so it may not claim the
-    // worktree is empty — the sidebar has no idea yet (`specs/herdr-host.md`).
+    // worktree is empty — the reviewr pane has no idea yet (`specs/herdr-host.md`).
     observe_agents(&mut app, &mut host, None);
     assert_eq!(app.agents_present(), None, "a failed enumeration observes nothing");
     assert_eq!(app.turn_wait_message(), "waiting for the first turn", "so it waits");
@@ -4732,30 +4733,26 @@ fn app_with_picker(r: &Repo) -> App {
     let mut app = app_on(r);
     comment_on(&mut app, '+', "one");
     comment_on(&mut app, '-', "two");
-    app.open_picker(three_agents(), None);
+    app.open_picker(three_agents());
     app
 }
 
 #[test]
-fn the_highlight_arms_the_last_sent_agent_then_the_one_beside_then_row_one() {
+fn the_highlight_arms_the_last_sent_agent_else_row_one() {
     let r = edited_repo();
-    // Driven through `open_picker`, the verb the send actually calls, so the arming order and
+    // Driven through `open_picker`, the verb the send actually calls, so the arming rule and
     // its wiring are proven together (`specs/herdr-host.md`).
-    let armed = |last_sent: Option<&str>, beside: Option<&str>| {
+    let armed = |last_sent: Option<&str>| {
         let mut app = app_on(&r);
         app.last_sent_pane = last_sent.map(str::to_string);
-        app.open_picker(three_agents(), beside);
+        app.open_picker(three_agents());
         app.picker_cursor
     };
-    // Level 1 wins whenever it is still a candidate.
-    assert_eq!(armed(Some("w8:p3"), Some("w8:p2")), 2);
-    // A last-sent pane that has since closed falls through to the pane opened beside.
-    assert_eq!(armed(Some("w8:pZ"), Some("w8:p2")), 1);
-    // Both absent or both closed land on the first row.
-    assert_eq!(armed(None, None), 0);
-    assert_eq!(armed(Some("w8:pZ"), Some("w8:pY")), 0);
-    // An own-tab sidebar has no pane it was opened beside, so it arms row 1 until its first send.
-    assert_eq!(armed(None, Some("w8:pY")), 0);
+    // The last-sent agent wins whenever it is still a candidate.
+    assert_eq!(armed(Some("w8:p3")), 2);
+    // Nothing sent this session, or a last-sent pane that has since closed: the first row.
+    assert_eq!(armed(None), 0);
+    assert_eq!(armed(Some("w8:pZ")), 0);
 }
 
 #[test]
@@ -4803,7 +4800,7 @@ fn a_picker_opened_from_the_comments_list_closes_back_onto_it() {
     comment_on(&mut app, '+', "one");
     comment_on(&mut app, '-', "two");
     app.open_list();
-    app.open_picker(three_agents(), None);
+    app.open_picker(three_agents());
     assert_eq!(app.mode, Mode::Picker);
 
     let keymap = Keymap::default();
@@ -4816,7 +4813,7 @@ fn a_picker_opened_from_the_comments_list_closes_back_onto_it() {
     app.close_list();
     app.open_find();
     let over_find = app.mode.clone();
-    app.open_picker(three_agents(), None);
+    app.open_picker(three_agents());
     handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
     assert_eq!(app.mode, over_find, "cancelling restores the find band");
 }
@@ -4908,7 +4905,7 @@ fn a_second_open_never_stacks_a_picker_that_one_esc_cannot_leave() {
     // nothing. The frozen row set also outranks a later one (specs/herdr-host.md).
     let mut app = app_with_picker(&r);
     app.picker_goto(2);
-    app.open_picker(vec![choice("w8:p9", "other")], None);
+    app.open_picker(vec![choice("w8:p9", "other")]);
     assert_eq!(app.picker_rows, three_agents(), "the second open replaced the frozen rows");
     assert_eq!(app.picker_cursor, 2, "the second open moved the highlight");
     handle_key(&mut app, KeyEvent::from(KeyCode::Esc), area, &keymap).unwrap();
@@ -4917,7 +4914,7 @@ fn a_second_open_never_stacks_a_picker_that_one_esc_cannot_leave() {
     // A picker over no rows has nothing to choose and no `enter` that acts, so it never opens.
     let mut app = app_on(&r);
     comment_on(&mut app, '+', "one");
-    app.open_picker(Vec::new(), None);
+    app.open_picker(Vec::new());
     assert_eq!(app.mode, Mode::Normal, "an empty row set opens no modal");
 }
 
@@ -4973,7 +4970,7 @@ fn a_config_error_closes_the_picker_and_keeps_the_comments() {
     let mut over_find = app_on(&r);
     comment_on(&mut over_find, '+', "one");
     over_find.open_find();
-    over_find.open_picker(three_agents(), None);
+    over_find.open_picker(three_agents());
     over_find.set_config_error("theme = \"not-a-theme\"".to_string());
     assert_eq!(over_find.mode, Mode::Normal, "the find band closes with the picker it held");
 
@@ -4982,7 +4979,7 @@ fn a_config_error_closes_the_picker_and_keeps_the_comments() {
     let mut over_list = app_on(&r);
     comment_on(&mut over_list, '+', "one");
     over_list.open_list();
-    over_list.open_picker(three_agents(), None);
+    over_list.open_picker(three_agents());
     over_list.set_config_error("theme = \"not-a-theme\"".to_string());
     assert_eq!(over_list.mode, Mode::List, "the list outlives the picker it held");
     assert!(over_list.picker_rows.is_empty(), "the frozen rows would be stale after recovery");

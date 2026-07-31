@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-29
+Last edited: 2026-07-31
 ---
 
 # Review model
@@ -29,7 +29,7 @@ Every field is required.
 
 ### Scopes
 
-A scope selects which changes `Changes` shows and which files `All files` annotates. The two tabs share one active scope. A sidebar starts in the config's `default_scope`, `uncommitted` when unset (`config.md`). A config reread never switches the active scope.
+A scope selects which changes `Changes` shows and which files `All files` annotates. The two tabs share one active scope. A reviewr pane starts in the config's `default_scope`, `uncommitted` when unset (`config.md`). A config reread never switches the active scope.
 
 | scope         | shows                                                         |
 | ------------- | ------------------------------------------------------------- |
@@ -53,7 +53,7 @@ The `branch` scope diffs against the merge-base of the base branch and `HEAD`. T
 - A listed entry that resolves to no ref is skipped, never an error.
 - When no candidate exists, `branch` shows nothing. The other scopes are unaffected.
 - The installed pane passes no arguments, so `--base` serves standalone and dev runs.
-- Standalone, with no `HERDR_PLUGIN_CONFIG_DIR`, reviewr reads no config file.
+- With no config directory (`config.md`), reviewr reads no config file.
 
 ### Ignored paths
 
@@ -138,7 +138,7 @@ How the agent pane is found and filled is in `herdr-host.md`.
 - A failed send or copy leaves every comment in place.
 - A consumed batch is gone. A second send never re-injects it.
 - Closing the pane or restarting herdr loses unexported comments.
-- Each sidebar holds its own comments. Two sidebars on one worktree never share or merge them.
+- Each reviewr pane holds its own comments. Two panes on one worktree never share or merge them.
 
 ## Non-goals
 

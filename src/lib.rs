@@ -1,4 +1,4 @@
-//! herdr-reviewr — a herdr-native review sidebar.
+//! herdr-reviewr — a herdr-native review pane.
 //!
 //! Browse an agent's changes (uncommitted / branch), leave line-range comments,
 //! and send them back to the agent (or the clipboard) — entirely in a herdr pane.
@@ -56,19 +56,21 @@ use crate::export::Clipboard;
 use crate::keymap::Keymap;
 use crate::model::Scope;
 
+/// The status-line note a slow config-dir lookup paints before its answer swaps the frame,
+/// and retracts if the lookup resolves nothing (`policies/ux-responsiveness.md`).
+const RESOLVING_NOTE: &str = "resolving plugin config…";
+
 /// Entry point: parse config, set up the terminal, run the loop, restore.
 pub fn run() -> Result<()> {
-    let cfg = Config::from_env();
+    let mut cfg = Config::from_env();
     log::init();
-    let initial_config = config::plugin_config();
-    let mut app = match &initial_config {
-        Ok(plugin_config) => ready_app(&cfg, plugin_config.clone()),
-        Err(error) => {
-            let mut app = App::blocked(repo_root(&cfg), Scope::Uncommitted, cfg.base.clone());
-            app.set_config_error(error.to_string());
-            app
-        }
-    };
+    // The config directory resolves once, at startup; every later read rereads only the
+    // file inside it (`specs/config.md`). Only the environment names it here: the CLI
+    // fallback is a herdr subprocess, so it waits until after the first paint below —
+    // a wedged herdr must never hold the paint (issue #4).
+    cfg.plugin_config_dir = config::resolve_config_dir(|| None);
+    let mut initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
+    let mut app = app_for(&cfg, &initial_config);
 
     let mut terminal = ratatui::init();
     // Bracketed paste so a multi-line paste arrives as one event, not raw keystrokes whose
@@ -86,11 +88,47 @@ pub fn run() -> Result<()> {
     }
     // Render before the first load, so a slow, failing, or hung `git` scan shows the reviewr UI
     // instead of the blank pane herdr leaves when the process blocks or exits before it renders
-    // (issue #4). Paint the empty frame first; then the initial load, non-fatal — an error opens
-    // the sidebar with the reason in the status line, the same contract as a failed poll refresh.
+    // (issue #4). Paint the empty frame first; then the initial load, non-fatal — an error
+    // opens the pane with the reason in the status line, the same contract as a failed poll
+    // refresh.
     if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
         restore_terminal(kbd);
         return Err(error.into());
+    }
+    // The cosmetic pane label, stamped after the first paint and cleared on a normal exit
+    // (`specs/herdr-host.md` Pane identity). Display only: identity is the process.
+    herdr::label_pane();
+    // The CLI half of config-dir resolution, on a painted pane: with no environment
+    // directory, ask herdr and rebuild from the directory it names. Nothing user-held
+    // exists yet — the rebuild happens before the first load — and a wedged herdr
+    // degrades this pane to the defaults instead of holding herdr's blank grid
+    // (issue #4, `specs/config.md` Failure semantics). A slow answer paints its note
+    // first, so the config swap is never a silent stale-then-swap; a fast one shows
+    // nothing (`policies/ux-responsiveness.md`).
+    let cli_dir = cfg
+        .plugin_config_dir
+        .is_none()
+        .then(|| {
+            herdr::plugin_config_dir_with(|| {
+                app.status = RESOLVING_NOTE.into();
+                let _ = terminal.draw(|f| ui::render(f, &app));
+            })
+        })
+        .flatten();
+    if let Some(dir) = cli_dir {
+        cfg.plugin_config_dir = Some(dir.into());
+        initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
+        app = app_for(&cfg, &initial_config);
+        if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
+            restore_terminal(kbd);
+            herdr::clear_pane_label();
+            return Err(error.into());
+        }
+    }
+    // A slow lookup that then resolved nothing leaves its note behind; retract it.
+    if app.status == RESOLVING_NOTE {
+        app.status.clear();
+        let _ = terminal.draw(|f| ui::render(f, &app));
     }
     if initial_config.is_ok()
         && let Err(e) = app.reload()
@@ -98,7 +136,9 @@ pub fn run() -> Result<()> {
         logln!("startup reload failed: {e:#}");
         app.status = format!("load failed: {e}");
     }
-    event_loop(&mut terminal, &mut app, &cfg, kbd)
+    let result = event_loop(&mut terminal, &mut app, &cfg, kbd);
+    herdr::clear_pane_label();
+    result
 }
 
 /// Leave the alternate screen and release terminal input modes before any bounded worker drain.
@@ -115,13 +155,27 @@ fn restore_terminal(kbd: bool) {
 /// the baseline ref off it independently, and turn membership compares resolved top levels
 /// against it (`specs/herdr-host.md`).
 ///
-/// A non-repo path is not an error — the sidebar opens to an empty state and starts showing
+/// A non-repo path is not an error — the pane opens to an empty state and starts showing
 /// changes if the directory becomes a repo.
 fn repo_root(cfg: &Config) -> std::path::PathBuf {
     git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
 }
 
-/// Build a fresh working sidebar only after the plugin configuration has validated.
+/// The startup app for one config snapshot: ready on `Ok`, blocked with the error on
+/// `Err`. Both the env-resolved build and the post-paint CLI-resolved rebuild go through
+/// here, so the two paths cannot drift.
+fn app_for(cfg: &Config, initial_config: &Result<PluginConfig, config::PluginConfigError>) -> App {
+    match initial_config {
+        Ok(plugin_config) => ready_app(cfg, plugin_config.clone()),
+        Err(error) => {
+            let mut app = App::blocked(repo_root(cfg), Scope::Uncommitted, cfg.base.clone());
+            app.set_config_error(error.to_string());
+            app
+        }
+    }
+}
+
+/// Build a fresh working reviewr pane only after the plugin configuration has validated.
 fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
     let repo = repo_root(cfg);
     let scope = plugin_config.default_scope();
@@ -669,7 +723,7 @@ fn event_loop(
             if let Ok((epoch, target, mut recovered)) = recovery_rx.try_recv() {
                 recovery_inflight = false;
                 if epoch == config_epoch {
-                    match config::plugin_config() {
+                    match config::plugin_config(cfg.plugin_config_dir.as_deref()) {
                         Ok(current) if current == target => {
                             recovered.carry_authored_state_from(app);
                             *app = recovered;
@@ -1246,7 +1300,7 @@ fn observe_plugin_config(
         epoch,
         recovery_tx,
         recovery_inflight,
-        config::plugin_config(),
+        config::plugin_config(cfg.plugin_config_dir.as_deref()),
     )
 }
 
@@ -1658,8 +1712,9 @@ pub fn handle_mouse(
     }
     // A mouse gesture is one of the "any other input" that drops an armed crossing: the reviewer
     // who reaches for the mouse has left the file's edge behind (`specs/input.md`). Pointer motion
-    // is not a gesture — capture reports every move over the pane, and a pointer resting on the
-    // sidebar would otherwise disarm the crossing without the reviewer touching anything.
+    // is not a gesture — capture reports every move over the pane, and a pointer resting on
+    // the reviewr pane would otherwise disarm the crossing without the reviewer touching
+    // anything.
     if !matches!(m.kind, MouseEventKind::Moved) {
         app.disarm_cross();
     }
@@ -2526,7 +2581,7 @@ mod refresh_tests {
     }
 
     #[test]
-    fn default_scope_seeds_a_fresh_sidebar_and_a_reread_never_switches_it() {
+    fn default_scope_seeds_a_fresh_pane_and_a_reread_never_switches_it() {
         let repo = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let path = config_dir.path().join("config.toml");

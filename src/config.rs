@@ -17,6 +17,9 @@ pub struct Config {
     pub theme: Option<String>,
     /// `Some(false)` when `--wrap off` is passed; `None` keeps the default (wrap on).
     pub wrap: Option<bool>,
+    /// The plugin config directory, resolved once at startup by [`resolve_config_dir`];
+    /// every later config read rereads only the file inside it (`specs/config.md`).
+    pub plugin_config_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -47,7 +50,14 @@ impl Config {
         }
         let repo =
             repo.or_else(|| std::env::current_dir().ok()).unwrap_or_else(|| PathBuf::from("."));
-        Self { repo, poll: Duration::from_millis(poll_ms.max(200)), base, theme, wrap }
+        Self {
+            repo,
+            poll: Duration::from_millis(poll_ms.max(200)),
+            base,
+            theme,
+            wrap,
+            plugin_config_dir: None,
+        }
     }
 
     /// Parse from the real process arguments.
@@ -123,7 +133,7 @@ impl NavigatorPosition {
     }
 }
 
-/// Where the toggle action opens the sidebar.
+/// Where the toggle action opens the reviewr pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TogglePlacement {
     Split,
@@ -159,7 +169,7 @@ impl ToggleDirection {
     }
 }
 
-/// One validated snapshot of `$HERDR_PLUGIN_CONFIG_DIR/config.toml`.
+/// One validated snapshot of `config.toml` in the resolved config directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginConfig {
     theme: String,
@@ -202,8 +212,8 @@ impl PluginConfig {
         &self.base_branches
     }
 
-    /// The scope a fresh sidebar is built with — startup and config recovery. A reread never
-    /// switches a running sidebar's scope (specs/review-model.md).
+    /// The scope a fresh reviewr pane is built with — startup and config recovery. A reread never
+    /// switches a running pane's scope (specs/review-model.md).
     pub fn default_scope(&self) -> crate::model::Scope {
         self.default_scope
     }
@@ -299,13 +309,32 @@ impl fmt::Display for PluginConfigError {
 
 impl std::error::Error for PluginConfigError {}
 
-/// Read one plugin config snapshot from the process environment. An unset config directory is
-/// standalone mode and uses defaults; a configured directory always names `config.toml`.
-pub fn plugin_config() -> Result<PluginConfig, PluginConfigError> {
-    let Some(dir) = std::env::var_os("HERDR_PLUGIN_CONFIG_DIR") else {
-        return Ok(PluginConfig::default());
-    };
-    plugin_config_in(dir)
+/// The config directory, resolved once at an entrypoint's startup (`specs/config.md`):
+/// `$HERDR_PLUGIN_CONFIG_DIR` when set, else the directory `cli` reports
+/// ([`crate::herdr::plugin_config_dir`]), else none — and none reads no config file.
+pub fn resolve_config_dir(cli: impl FnOnce() -> Option<String>) -> Option<PathBuf> {
+    config_dir_from(std::env::var_os("HERDR_PLUGIN_CONFIG_DIR"), cli)
+}
+
+/// The resolution rule behind [`resolve_config_dir`], split out so tests can inject both
+/// inputs. An empty value names no directory on either branch — otherwise an empty env var
+/// would read `./config.toml` from the repo under review and block the pane on it.
+fn config_dir_from(
+    env: Option<std::ffi::OsString>,
+    cli: impl FnOnce() -> Option<String>,
+) -> Option<PathBuf> {
+    env.filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| cli().filter(|dir| !dir.is_empty()).map(PathBuf::from))
+}
+
+/// Read one plugin config snapshot from the resolved config directory. No directory reads no
+/// config file, which is the missing-file outcome and uses every default (`specs/config.md`).
+pub fn plugin_config(dir: Option<&Path>) -> Result<PluginConfig, PluginConfigError> {
+    match dir {
+        Some(dir) => plugin_config_in(dir),
+        None => Ok(PluginConfig::default()),
+    }
 }
 
 /// Read one plugin config snapshot from `<dir>/config.toml`.
@@ -641,9 +670,14 @@ fn valid_ref_name(name: &str) -> bool {
         })
 }
 
-/// Print the shared normalized configuration for `herdr/sidebar.sh`.
+/// Print the shared normalized configuration for the plugin action script. This is its own
+/// entrypoint (`--resolve-plugin-config`), so it resolves the config directory itself — and
+/// initializes the log itself, or the herdr-side diagnostics of a failed lookup would be
+/// dropped on the one path that exercises the CLI fallback from a plain shell.
 pub fn print_plugin_config() -> Result<(), PluginConfigError> {
-    println!("{}", plugin_config()?.to_json());
+    crate::log::init();
+    let dir = resolve_config_dir(crate::herdr::plugin_config_dir);
+    println!("{}", plugin_config(dir.as_deref())?.to_json());
     Ok(())
 }
 
@@ -676,6 +710,31 @@ mod tests {
     fn poll_has_a_floor() {
         assert_eq!(parse(&["--poll", "10"]).poll, Duration::from_millis(200));
         assert_eq!(parse(&["--poll", "garbage"]).poll, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn config_dir_prefers_the_env_and_falls_back_to_the_cli() {
+        use std::path::PathBuf;
+        // Env set: the CLI is never asked.
+        let dir =
+            super::config_dir_from(Some("/tmp/cfg".into()), || panic!("cli asked despite the env"));
+        assert_eq!(dir, Some(PathBuf::from("/tmp/cfg")));
+        // Env unset: the CLI's directory is used. An empty env value names no directory
+        // and falls through the same way.
+        let dir = super::config_dir_from(None, || Some("/tmp/from-cli".to_string()));
+        assert_eq!(dir, Some(PathBuf::from("/tmp/from-cli")));
+        let dir = super::config_dir_from(Some("".into()), || Some("/tmp/from-cli".to_string()));
+        assert_eq!(dir, Some(PathBuf::from("/tmp/from-cli")));
+        // An empty CLI answer names no directory either — `PathBuf::from("")` would read
+        // `./config.toml` from the repo under review.
+        assert_eq!(super::config_dir_from(None, || Some(String::new())), None);
+        // Neither resolves — herdr absent or refusing: no config directory.
+        assert_eq!(super::config_dir_from(None, || None), None);
+    }
+
+    #[test]
+    fn no_config_directory_reads_no_file_and_uses_defaults() {
+        assert_eq!(super::plugin_config(None).unwrap(), PluginConfig::default());
     }
 
     #[test]

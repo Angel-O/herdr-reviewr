@@ -24,7 +24,7 @@ test:
 build:
     cargo build
 
-# run the sidebar in the current repo
+# run reviewr in the current repo
 run:
     cargo run
 

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-07-27
+Last edited: 2026-07-31
 ---
 
 # Input
@@ -131,7 +131,7 @@ Row 1 is always shown:
 | more    | a `?` at the right, muted but legible — always present, and expands the rest      |
 
 A narrow row drops trailing actions to fit. The status outranks them, since the `?` panel repeats
-every action and nothing repeats the status. A 40-column sidebar shows `no agent here …` rather than
+every action and nothing repeats the status. A 40-column reviewr pane shows `no agent here …` rather than
 nothing. The status drops only below a legible width. The primary, `send`, and the `?` never drop. On
 a pane too narrow even for those, the primary truncates before the `?` does.
 

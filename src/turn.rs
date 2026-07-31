@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn an_empty_worktree_rests_so_its_first_working_agent_starts_a_turn() {
-        // The fold that makes a freshly opened sidebar track the next turn it sees, rather
+        // The fold that makes a freshly opened reviewr pane track the next turn it sees, rather
         // than waiting for an agent that was already there (`specs/herdr-host.md`).
         assert_eq!(WorktreeState::fold([]), WorktreeState::Resting);
         let mut t = TurnTracker::default();

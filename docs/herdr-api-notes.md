@@ -1,7 +1,8 @@
 # herdr API notes (verified against herdr 0.7.5)
 
-The herdr surface herdr-review depends on, confirmed live. herdr-review ships as a
-herdr **plugin** (`../herdr-plugin.toml`); the binary runs inside a plugin pane.
+The herdr surface herdr-reviewr depends on, confirmed live (last sweep 2026-07-31).
+herdr-reviewr ships as a herdr **plugin** (`../herdr-plugin.toml`), and the binary is a plain
+terminal program: any pane that runs it is a reviewr pane (`../specs/herdr-host.md`).
 
 ## Plugin manifest (`herdr-plugin.toml`)
 
@@ -12,27 +13,68 @@ Top-level: `id`, `name`, `version`, `min_herdr_version`, `platforms` (required);
 command = ["cargo", "install", "--path", "."]
 
 [[panes]]                                   # an openable pane entrypoint
-id = "sidebar"
+id = "pane"
 placement = "split"                         # overlay (default) | split | tab | zoomed
-command = ["herdr-review"]                  # see "pane command" below
+command = ["herdr-reviewr"]                 # see "pane command" below
 
 [[actions]]                                 # invokable command, bindable to a key
 id = "toggle"
 contexts = ["pane", "workspace"]
-command = ["bash", "herdr/sidebar.sh", "toggle"]
+command = ["bash", "herdr/pane.sh", "toggle"]
 
 [[events]]                                  # run a command on a herdr event
 on = "worktree.created"
-command = ["bash", "herdr/sidebar.sh", "open"]
+command = ["bash", "herdr/pane.sh", "open"]
 ```
 
 Lifecycle: `herdr plugin link <dir>` (local dev, no build) · `herdr plugin install <owner>/<repo>` ·
 `plugin list` · `plugin action invoke <action_id> --plugin <id>` · `plugin log list --plugin <id>`.
 
-## Open / close the sidebar pane
+## Pane identity: the plain-pane surface (verified 2026-07-31)
+
+The direct-run mode rides on four calls plus the plain-pane env, all confirmed live on 0.7.5:
+
+- **Every pane carries `HERDR_PANE_ID`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and
+  `HERDR_SOCKET_PATH`** — plugin panes, layout panes, and hand-opened shells alike. The binary
+  needs no plugin env to know its own pane.
+- **`herdr pane process-info --pane <id>`** → the pane's foreground process group:
+
+  ```json
+  {"result":{"process_info":{"foreground_process_group_id":17124,"foreground_processes":[
+    {"pid":17124,"name":"herdr-reviewr","argv0":"herdr-reviewr",
+     "argv":["/…/bin/herdr-reviewr"],"cwd":"/…/repo"}],
+    "pane_id":"w4:p5","shell_pid":81333}}}
+  ```
+
+  `name` is the rewritable process title, not the executable (a live claude pane reports
+  `name: "2.1.220"`), so identity keys on the `argv0`/`argv[0]` basename. A live reviewr pane
+  reports `argv0: "herdr-reviewr"` bare and `argv[0]` as the full binary path. `pane.sh` reads
+  this per pane to find the workspace's reviewr panes.
+
+  A `pane list` entry carries no foreground-process fields — its only process-adjacent keys
+  are `foreground_cwd` and `terminal_title`/`terminal_title_stripped`, and the title is the
+  same rewritable string as `name` above (verified live, 0.7.5). So the per-pane
+  `process-info` read is required for identity; nothing in the list snapshot can replace it.
+
+  A gone pane answers `{"error":{"code":"pane_not_found",…}}` with exit 1 from both
+  `pane process-info` and plain `pane close` (verified live, 0.7.5). `pane.sh` keys its
+  converge-vs-refuse branches on that code.
+- **`herdr pane rename <id> [LABEL]... [--clear]`** sets and clears a pane's label. The binary
+  stamps its own pane `reviewr` at startup and clears it on a normal exit — display only,
+  nothing reads it back.
+- **`herdr plugin config-dir <plugin_id>`** prints the plugin's config directory
+  (`~/.config/herdr/plugins/config/persiyanov.reviewr`). The binary falls back to it when
+  `HERDR_PLUGIN_CONFIG_DIR` is unset, so a hand-launched pane reads the same `config.toml`
+  (`../specs/config.md`).
+- **`herdr pane split [--pane <id>|--current] [--direction …] [--ratio …] [--cwd …] [--env K=V]
+  [--focus|--no-focus]`, `pane run <id> <command>…`, `pane current`** exist for layout tooling.
+  reviewr's own actions still open through `plugin pane open`; a layout plugin can use these
+  directly with `command = "herdr-reviewr"` and the result is the same reviewr pane.
+
+## Open / close a reviewr pane
 
 ```
-herdr plugin pane open --plugin reviewr --entrypoint sidebar \
+herdr plugin pane open --plugin reviewr --entrypoint pane \
   --placement split --direction right --target-pane <pane> --cwd <repo> --no-focus
 herdr plugin pane close <pane_id>
 ```
@@ -40,10 +82,11 @@ herdr plugin pane close <pane_id>
 - New pane id: `.result.plugin_pane.pane.pane_id`. The pane is auto-labeled with the entrypoint `title`.
 - The same pane object carries `tab_id` (verified across 10 live plugin panes, 0.7.5). A `tab`-placement open reads `.result.plugin_pane.pane.tab_id` to rename the fresh tab.
 - **`plugin pane close` only closes panes in the in-memory plugin-pane registry** — after a herdr
-  restart it refuses a still-live sidebar with `plugin_pane_not_found` (observed, 0.7.1). Plain
-  `herdr pane close <pane_id>` closes any pane by id; prefer it for teardown.
+  restart it refuses a still-live pane with `plugin_pane_not_found` (observed, 0.7.1), and a
+  layout-launched pane was never registered at all. Plain `herdr pane close <pane_id>` closes any
+  pane by id; `pane.sh` sweeps with it.
 - `HERDR_PLUGIN_STATE_DIR` resolves to `~/.local/state/herdr/plugins/<plugin_id>/` (observed, 0.7.1).
-- **Pane command resolves against the pane's cwd (`--cwd`, the repo), not the plugin root** — a relative `./target/...` path fails, so invoke the binary by name (`herdr-review`) on `PATH` and install it via the `[[build]]` step.
+- **Pane command resolves against the pane's cwd (`--cwd`, the repo), not the plugin root** — a relative `./target/...` path fails, so the manifest invokes the binary by absolute path under `$HERDR_PLUGIN_ROOT`.
 
 ## Runtime env (plugin commands and panes)
 
@@ -53,13 +96,8 @@ herdr plugin pane close <pane_id>
 herdr runs plugin commands with a minimal `PATH`; prepend common bin dirs for `jq`/`git`.
 
 - **Action context** (`HERDR_PLUGIN_CONTEXT_JSON`): `workspace_id`, `tab_id`, `focused_pane_id`,
-  `focused_pane_cwd`, `worktree:{repo_root, checkout_path, ...}`.
-- **A plugin pane inherits the context of the open that created it** (verified live, 0.7.5: nine
-  running sidebars, each carrying `HERDR_PLUGIN_CONTEXT_JSON` with `invocation_source: "api"` and
-  `correlation_id: "plugin-pane"`). `focused_pane_id` names the pane the sidebar was opened beside,
-  never the sidebar's own `HERDR_PANE_ID`, which is what level 2 of the picker's arming ladder
-  reads (`../specs/herdr-host.md`). A sidebar opened beside a non-agent pane carries that pane's
-  id and no `focused_pane_agent`, so the ladder falls through to the first row.
+  `focused_pane_cwd`, `worktree:{repo_root, checkout_path, ...}`. `pane.sh` reads
+  `focused_pane_cwd` to place a manual open; the binary reads none of it.
 - **`plugin action invoke` resolves context from the focused workspace**, wherever it is run — the
   calling pane's `HERDR_*` env is ignored, and `invoke <action_id> [--plugin ID]` has no workspace
   selector (verified live, 0.7.1: invoked from pane `w1X:p1`, context arrived for focused `w1B`).
@@ -83,14 +121,14 @@ It takes no flags, so any filter is the caller's to apply. The row order is herd
 observed on 0.7.5 across 13 live agents, entries arrive grouped by workspace and by tab within a
 workspace. No sample held two agents in one tab, so the order inside a tab is unverified.
 
-- Send candidates = every agent in the sidebar's `HERDR_WORKSPACE_ID`. One sends directly,
+- Send candidates = every agent in the reviewr pane's `HERDR_WORKSPACE_ID`. One sends directly,
   several open the picker (`../specs/herdr-host.md`). Turn tracking reads no pane topology at
-  all: it takes every agent's `cwd` and keeps those resolving to the sidebar's git top level.
+  all: it takes every agent's `cwd` and keeps those resolving to the reviewr pane's git top level.
 - `cwd` and `foreground_cwd` both carry the agent's working directory, and matched on every
   entry of a 10-agent sample. Each entry also carries `agent_session` (a stable UUID),
   `state_change_seq`, `focused`, and `terminal_title_stripped`, none of which reviewr reads.
-- 0.7.5 lists only real agent panes. A plugin sidebar or a plain shell appears in `pane list`
-  with `agent: null` and never in `agent list`, so excluding our own pane is defensive.
+- 0.7.5 lists only real agent panes. A reviewr pane or a plain shell appears in `pane list`
+  without an `agent` key and never in `agent list`, so excluding our own pane is defensive.
 - `name`, `display_agent`, and `state_labels` are omitted entirely until something sets them.
   `herdr agent rename <pane> <name>` makes `name` appear; `--clear` leaves it present and null.
   Names are `[a-z0-9_-]{1,32}` and must start with a lowercase letter, so they carry no spaces.

@@ -66,3 +66,23 @@ mkdir -p "$BIN_DIR"
 tar -xzf "$tmp/$archive" -C "$tmp"
 install -m 0755 "$tmp/$NAME" "$BIN_DIR/$NAME"
 echo "$NAME: installed $BIN_DIR/$NAME"
+
+# Stable launch paths (specs/herdr-host.md, Install paths): symlinks into the installed
+# plugin, never copies, so a launch after an uninstall fails loudly instead of running a
+# stale build. An existing symlink re-points on every install — the hash-suffixed plugin
+# root moves — but anything else at the path is left alone: a user's own binary there
+# (`cargo install --root ~/.local`) must survive, and `ln -sfn` onto a real directory
+# would nest inside it. The binary is already installed, so a skipped or failed link
+# warns without failing the install.
+link_binary() {
+  if mkdir -p "$1" 2>/dev/null && { [ -L "$1/$NAME" ] || [ ! -e "$1/$NAME" ]; } &&
+    ln -sfn "$BIN_DIR/$NAME" "$1/$NAME" 2>/dev/null; then
+    echo "$NAME: linked $1/$NAME"
+  else
+    echo "$NAME: warning: could not link $1/$NAME" >&2
+  fi
+}
+link_binary "$HOME/.local/state/herdr/plugins/persiyanov.reviewr/bin"
+if [ -d "$HOME/.local/bin" ]; then
+  link_binary "$HOME/.local/bin"
+fi

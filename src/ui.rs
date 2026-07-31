@@ -527,7 +527,7 @@ fn header_suffix(app: &App) -> String {
 /// The column the `Send` button paints at, matching `render_tab_bar`'s layout: right-aligned
 /// when the header fits, packed left right after the suffix when the bar overflows (`pad`
 /// collapses to 0). `hit_header` must use this, not a bare right-alignment, or a `Send` click
-/// mis-fires (and on a narrow sidebar lands in a tab span) when the header overflows.
+/// mis-fires (and on a narrow pane lands in a tab span) when the header overflows.
 fn send_button_col(app: &App, prefix: usize, width: usize) -> usize {
     let before = prefix + scope_chip(app).len() + header_suffix(app).width();
     before + width.saturating_sub(before + send_button(app).len())
@@ -1641,7 +1641,7 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
     // The status answers the keypress the reviewer just made and fades on its own clock, so it
     // outranks the cursor's actions: the `?` panel repeats every action, and nothing repeats the
     // status (`specs/input.md`). It reserves its room here, before the actions pack into what is
-    // left, so a 40-column sidebar still shows the send's outcome.
+    // left, so a 40-column pane still shows the send's outcome.
     //
     // The reservation is what the status can actually take, never what it wants: capped at the
     // room that exists, and nothing at all when even that is below `STATUS_MIN`. Reserving the

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-29
-Last edited: 2026-07-27
+Last edited: 2026-07-31
 ---
 
 # Theme
@@ -15,7 +15,7 @@ A theme is a handful of anchor colors plus a paired syntax theme. Every other UI
 The user selects a theme by name, with the same name they use in herdr:
 
 ```toml
-# $HERDR_PLUGIN_CONFIG_DIR/config.toml
+# config.toml, in the resolved config directory (config.md)
 theme = "tokyo-night"
 ```
 
@@ -79,11 +79,11 @@ A herdr name outside this set (`kanagawa`, `kanagawa-lotus`, `vesper`, `terminal
 - Precedence: `--theme <name>` over the config `theme` over the default `catppuccin`.
 - The config file is re-read on refresh. Editing `theme` and refreshing re-themes without a relaunch.
 - Theme names match herdr's wherever both ship a palette, so a value copied from a herdr config resolves to the same palette.
-- Standalone, with no `HERDR_PLUGIN_CONFIG_DIR`, reviewr reads no config file.
+- With no config directory (`config.md`), reviewr reads no config file.
 
 ## Failure semantics
 
-reviewr only reads the config file, never writes it, so concurrent sidebars and refresh re-reads need no coordination.
+reviewr only reads the config file, never writes it, so concurrent reviewr panes and refresh re-reads need no coordination.
 
 - A missing config or omitted `theme` resolves to the default. Invalid plugin config follows `config.md`.
 - An unknown `--theme` override resolves to the default and logs the unsupported name.

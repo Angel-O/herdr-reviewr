@@ -1,12 +1,12 @@
 ---
 Status: Current
 Created: 2026-07-10
-Last edited: 2026-07-27
+Last edited: 2026-07-31
 ---
 
 # Configuration
 
-How reviewr validates and applies `$HERDR_PLUGIN_CONFIG_DIR/config.toml` across the sidebar binary, actions, and events.
+How reviewr finds, validates, and applies the plugin config across the reviewr pane, the actions, and the events.
 
 ## Overview
 
@@ -54,7 +54,9 @@ The cross-entrypoint invariants, coded for citation:
 | `CFG-BLOCKED-INERT` | An entrypoint that observes an invalid file performs none of its normal work.  |
 | `CFG-ONE-SNAPSHOT`  | One operation or refresh uses one validated config snapshot.                   |
 
-A missing file uses every default, and so does an omitted key. An invalid file applies none of its keys. Every sidebar frame, manual action, and plugin event validates the whole file first.
+The config file is `config.toml` in the config directory. An entrypoint resolves the directory once, at startup, and rereads only the file. The directory is `$HERDR_PLUGIN_CONFIG_DIR` when set, else the one `herdr plugin config-dir persiyanov.reviewr` prints. When neither resolves, the entrypoint reads no config file, which is the missing-file outcome, never an invalid config.
+
+A missing file uses every default, and so does an omitted key. An invalid file applies none of its keys. Every pane frame, manual action, and plugin event validates the whole file first.
 
 Each `base_branches` entry canonicalizes to one bare branch name: a leading `refs/heads/`, `refs/remotes/origin/`, or `origin/` prefix is stripped. Duplicate entries collapse to the first occurrence. Every consumer resolves an entry through `refs/remotes/origin/<name>`, then `refs/heads/<name>`. The `--base` flag resolves verbatim first, then as a canonical entry. `origin/HEAD` backstops an unresolvable list (`review-model.md`).
 
@@ -64,17 +66,17 @@ A hostname is recognized by at most one forge. A host key naming another host ke
 
 An error names the config path and the read, syntax, key, or value failure. It states the expected form when a value is invalid.
 
-| entrypoint       | invalid config outcome                                               |
-| ---------------- | -------------------------------------------------------------------- |
-| sidebar binary   | shows the config error plus its automatic-reload remedy; performs no review work |
-| manual action    | exits 1 with the config error and performs no action                   |
-| plugin event     | exits 1, logs the config error, and performs no action                 |
+| entrypoint       | invalid config outcome                                                              |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| reviewr pane     | shows the config error plus its automatic-reload remedy and performs no review work |
+| manual action    | exits 1 with the config error and performs no action                                |
+| plugin event     | exits 1, logs the config error, and performs no action                              |
 
-The sidebar reads the file at startup and on every refresh. While blocked, it starts no new review work and performs the config reads needed to detect a fix.
+The pane reads the file at startup and on every refresh. While blocked, it starts no new review work and performs the config reads needed to detect a fix.
 
 `navigator_position` sets the position at startup and after config recovery. The `navigator-position` action may change it for the current session. A later valid config snapshot replaces the session position only when its `navigator_position` differs from the previous valid snapshot. An unchanged reread or an edit to another config key preserves the session position. Recovery reapplies the configured position and preserves both session navigator shares.
 
-The `PR` tab's fetch is not a config read. It runs under the sidebar's current snapshot (→ CFG-ONE-SNAPSHOT).
+The `PR` tab's fetch is not a config read. It runs under the pane's current snapshot (→ CFG-ONE-SNAPSHOT).
 
 `--resolve-plugin-config` prints the validated config as JSON, every key included, the keymap resolved.
 
@@ -92,20 +94,20 @@ Config writers must build a complete file beside `config.toml`, then replace it 
 
 A key appears at most once across the resolved keymap's lists. An existing custom binding does not displace a newly added default. If an upgrade creates a collision, the config is invalid and the error names both actions and the shared character.
 
-The sidebar validates before drawing each frame. That frame and the next input event use the resulting config and layout snapshot. A file change after drawing affects the following frame.
+A frame's validated snapshot serves that frame and the next input event. A file change after drawing affects the following frame.
 
 A binding never displaces a fixed key (`input.md`). An unknown action name is an unknown key. A malformed key and a duplicate key are both invalid values (→ CFG-WHOLE-FILE).
 
-A blocked sidebar answers only the default `quit` key.
+A blocked pane answers only the default `quit` key.
 
 ## Traces
 
 **Live config breaks and recovers**
 
-1. The sidebar reads a valid file. The plugin works with that complete config.
-2. The user saves an invalid value. The next read blocks the sidebar with the config error (→ CFG-BLOCKED-INERT).
+1. The pane reads a valid file. The plugin works with that complete config.
+2. The user saves an invalid value. The next read blocks the pane with the config error (→ CFG-BLOCKED-INERT).
 3. The user invokes an action. The action refuses without a side effect (→ CFG-BLOCKED-INERT).
-4. The user fixes the file. The next read applies the complete config and restores the sidebar.
+4. The user fixes the file. The next read applies the complete config and restores the pane.
 
 **Config changes during an action**
 
@@ -122,8 +124,9 @@ A blocked sidebar answers only the default `quit` key.
 ## Failure semantics
 
 - A missing file is valid and uses every default. Any other read failure is an invalid config.
+- A `herdr plugin config-dir` call that fails or does not answer promptly resolves no directory, the missing-file outcome. The wait is bounded, so a wedged herdr never holds the pane's first paint.
 - An invalid first read blocks the plugin exactly like a later invalid read.
-- A valid later read clears the error and rebuilds the sidebar from fresh inputs without a plugin reinstall or restart.
+- A valid later read clears the error and rebuilds the pane from fresh inputs without a plugin reinstall or restart.
 - A valid intermediate file is indistinguishable from an intended config. Non-atomic writers can apply it.
 - Concurrent entrypoints validate independently. None coordinates or persists config state.
 

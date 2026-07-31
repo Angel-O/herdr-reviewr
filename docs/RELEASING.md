@@ -77,16 +77,16 @@ end-to-end test: it exercises the exact `herdr plugin install` path a user hits.
    herdr plugin list --plugin persiyanov.reviewr          # confirm: github source + version X.Y.Z
    ```
 
-2. **Relaunch the sidebar** so the open pane runs the new binary instead of the old process.
+2. **Relaunch the reviewr pane** so it runs the new binary instead of the old process.
    A running pane keeps its old binary image until it closes. Closing is safe to script:
 
    ```bash
-   herdr plugin action invoke close --plugin persiyanov.reviewr   # closes every reviewr pane
+   herdr plugin action invoke close --plugin persiyanov.reviewr   # closes the focused workspace's reviewr panes
    ```
 
    **Reopen with your own toggle keybinding, never a scripted `open`.** The `open` and `toggle`
    actions act on the focused workspace and ignore `HERDR_WORKSPACE_ID`, so a scripted reopen
-   stacks sidebars into whatever space you happen to be looking at rather than the ones you
+   stacks panes into whatever space you happen to be looking at rather than the ones you
    closed (`../AGENTS.md`).
 
 ## Notes
