@@ -1,12 +1,12 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-27
+Last edited: 2026-07-31
 ---
 
 # TUI
 
-The terminal frame: the two-pane layout, the tabs, and how the view stays current.
+The terminal frame: the pane layout, the tabs, and how the view stays current.
 
 ## Overview
 
@@ -56,6 +56,8 @@ When the split axis has at least six cells, each pane keeps at least three cells
 
 A layout change moves nothing else (`overview.md`), and both remembered shares persist across it.
 
+`navigator-hide` hides the navigator, and the read pane takes the whole body. No divider exists while hidden, so nothing drags. The same action shows it again in its kept position and share, and focus stays on the read pane. Hidden is one state across `Changes` and `All files`. On `PR` the navigator always shows: `navigator-hide` is inert there, and a `PR` visit leaves the hidden state untouched. Restarting reviewr shows the navigator. Config recovery preserves the hidden state (`config.md`). Hiding is presence, never a position. The `navigator-position` cycle has no hidden stop.
+
 ## Behavior
 
 ### Tabs
@@ -64,6 +66,7 @@ A layout change moves nothing else (`overview.md`), and both remembered shares p
 - The footer's shortcut expansion is one global toggle, not tab state (`input.md`).
 - A first visit opens the tab's first file or card. A collapsed tree with the cursor on a directory opens nothing until a pick.
 - A tab switch keeps the focused pane. An empty read pane focuses the navigator.
+- While the navigator is hidden, focus is the read pane.
 
 ### Refresh
 
@@ -94,8 +97,8 @@ A layout change moves nothing else (`overview.md`), and both remembered shares p
 - No editing, staging, or committing from the UI.
 - No side-by-side split view. The diff is one unified column.
 - No per-tab navigator position. One position applies to every tab.
-- No automatic position or content-sized navigator. Layout changes only through config, `p`, resize keys, or dragging.
-- No hidden navigator. Both panes remain present.
+- No automatic position or content-sized navigator. Layout changes only through config, `p`, `z`, resize keys, or dragging.
+- No configured hidden default. The navigator starts visible, and only `navigator-hide` hides it.
 - No multi-file review stream. Each read pane shows one selected item.
 
 ## Related specs

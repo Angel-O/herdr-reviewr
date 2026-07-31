@@ -1516,6 +1516,145 @@ fn navigator_actions_cycle_remember_shares_and_respect_modes() {
 }
 
 #[test]
+fn navigator_hide_toggles_full_width_and_respects_modes() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 120, 40);
+    app.focus = Focus::Files;
+
+    // Hide: focus pins to the read pane, the layout keys go inert, no divider remains.
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden);
+    assert_eq!(app.focus, Focus::Diff, "hiding moves focus to the read pane");
+    press(&mut app, &keymap, KeyCode::Char('p'));
+    press(&mut app, &keymap, KeyCode::Char('<'));
+    assert_eq!(app.navigator_position, NavigatorPosition::Right, "`p` is inert while hidden");
+    assert_eq!(app.navigator_side_pct, 32, "`<` is inert while hidden");
+    let body = herdr_reviewr::ui::body_rect(area, &app);
+    let row = body.y + body.height / 2;
+    assert!(
+        (body.x..body.x + body.width)
+            .all(|col| !herdr_reviewr::ui::hit_divider(area, &app, col, row)),
+        "no divider exists while hidden"
+    );
+
+    // Show: the same key, kept position and share, focus staying on the read pane.
+    app.reveal_files = false;
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(!app.navigator_hidden);
+    assert_eq!(app.focus, Focus::Diff, "showing leaves focus on the read pane");
+    assert!(app.reveal_files, "showing re-reveals the cursor at the real viewport");
+
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    press(&mut app, &keymap, KeyCode::Tab);
+    assert!(!app.navigator_hidden, "`tab` shows the navigator");
+    assert_eq!(app.focus, Focus::Files, "and focuses it");
+
+    // The composer and the search input take `z` as text; the comments list keeps it inert.
+    app.focus = Focus::Diff;
+    app.diff_cursor = row_with(&app, '+');
+    app.start_comment();
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert_eq!(app.input, "z", "the hide key is text in the composer");
+    assert!(!app.navigator_hidden);
+    app.cancel_comment();
+
+    app.mode = Mode::List;
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(!app.navigator_hidden, "the action is inert in the comments list");
+    app.mode = Mode::Normal;
+
+    press(&mut app, &keymap, KeyCode::Char('/'));
+    assert_eq!(app.mode, Mode::Search);
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert_eq!(app.search.as_ref().unwrap().query, "z", "the hide key is text in search");
+    assert!(!app.navigator_hidden);
+    press(&mut app, &keymap, KeyCode::Esc);
+    press(&mut app, &keymap, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+
+    // `PR` is exempt: `z` inert there, and the state waits for the return to a file tab.
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden);
+    app.set_tab(herdr_reviewr::app::Tab::Pr).unwrap();
+    assert!(!app.navigator_hidden_here(), "`PR` always shows its navigator");
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden, "`z` is inert on `PR`");
+    press(&mut app, &keymap, KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Files, "`PR` focuses its own navigator freely");
+    app.set_tab(herdr_reviewr::app::Tab::Changes).unwrap();
+    assert!(app.navigator_hidden_here(), "the hidden state survives the `PR` visit");
+    assert_eq!(app.focus, Focus::Diff, "and the return restores read-pane focus");
+}
+
+#[test]
+fn footer_swaps_the_hide_key_between_go_and_row_one() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Go)),
+        "visible: `z hide` waits under `?`"
+    );
+    assert!(!bands.contains(&(FooterAction::NavigatorHide, Band::Do)));
+
+    app.focus = Focus::Files;
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Do)),
+        "the files pane's calm row 1 carries `z hide`"
+    );
+    app.focus = Focus::Diff;
+
+    app.toggle_navigator_hidden();
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Do)),
+        "hidden: `z show` joins row 1"
+    );
+    assert!(
+        !bands.iter().any(|&(a, _)| a == FooterAction::NavigatorPosition),
+        "`p position` drops while hidden"
+    );
+
+    app.set_tab(herdr_reviewr::app::Tab::Pr).unwrap();
+    let bands = app.footer_bands();
+    assert!(
+        !bands.iter().any(|&(a, _)| a == FooterAction::NavigatorHide),
+        "`PR` never lists the hide key"
+    );
+    assert!(bands.contains(&(FooterAction::NavigatorPosition, Band::Go)), "`p` stays on `PR`");
+}
+
+#[test]
+fn hidden_footer_keeps_the_way_back_on_an_empty_changeset() {
+    let repo = Repo::init();
+    repo.write("a.rs", "fn a() {}\n");
+    repo.commit_all("c");
+    let mut app = app_on(&repo);
+    app.toggle_navigator_hidden();
+
+    let bands = app.footer_bands();
+    assert!(bands.contains(&(FooterAction::TogglePane, Band::Go)), "`tab files` stays offered");
+    assert!(bands.contains(&(FooterAction::NavigatorHide, Band::Do)), "`z show` joins row 1");
+}
+
+#[test]
+fn hidden_empty_read_pane_leads_with_show() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.toggle_navigator_hidden();
+    app.visible.clear();
+
+    let bands = app.footer_bands();
+    assert_eq!(bands[0], (FooterAction::NavigatorHide, Band::Primary), "`z show` leads row 1");
+    assert!(bands.contains(&(FooterAction::TogglePane, Band::Do)), "`tab files` sits beside it");
+}
+
+#[test]
 fn divider_drag_cancels_until_mouse_up() {
     let r = edited_repo();
     let mut app = app_on(&r);
@@ -3111,7 +3250,7 @@ fn fixed_keys_survive_rebinding() {
     let mut app = app_on(&r);
     let keymap = Keymap::resolve(&[
         (Action::Down, vec![Key::plain('x')]),
-        (Action::Up, vec![Key::plain('z')]),
+        (Action::Up, vec![Key::plain('X')]),
     ])
     .unwrap();
     app.focus = Focus::Diff;
@@ -3945,6 +4084,19 @@ fn a_reveal_completion_settles_the_tab_and_rearms_the_cursor_reveal() {
     assert!(herdr_reviewr::land_world_completion(&mut app, landing, 2));
     assert!(app.reveal_files, "a switch-originated landing re-reveals the re-anchored cursor");
     assert!(app.entries.iter().any(|f| f.path == "c.rs"), "the landing caught up");
+}
+
+#[test]
+fn a_landing_world_result_never_flips_the_hidden_navigator() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.toggle_navigator_hidden();
+    r.write("c.rs", "c\n");
+    let mut landing = completion_for(&app, 2);
+    landing.reveal = true;
+    assert!(herdr_reviewr::land_world_completion(&mut app, landing, 2));
+    assert!(app.navigator_hidden, "the hidden state is place state; a landing reconciles only");
+    assert_eq!(app.focus, Focus::Diff, "the settle keeps focus on the lone read pane");
 }
 
 #[test]

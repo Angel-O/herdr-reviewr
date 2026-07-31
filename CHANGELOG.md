@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Hide the navigator.** `z` hides the files navigator so the diff takes the whole body, and
+  shows it again in its kept position and share. While hidden, `tab` brings it back focused,
+  the footer offers `z show`, and the `PR` tab keeps its navigator. Rebind via `navigator-hide`.
+
 ## [0.27.1] — 2026-07-31
 
 ### Fixed

@@ -372,6 +372,42 @@ fn the_selected_file_row_fills_with_the_shared_selection_color() {
 }
 
 #[test]
+fn a_hidden_navigator_gives_the_read_pane_the_whole_body() {
+    let mut app = edited_app();
+    app.focus = Focus::Diff;
+    app.next_hunk();
+    let cursor_y = 2 + app.diff_cursor as u16;
+    let fill = |app: &App| {
+        let buf = render_buffer(app);
+        (1..139u16)
+            .filter(|&x| buf.cell((x, cursor_y)).is_some_and(|c| c.bg == SELECTION_BG))
+            .count()
+    };
+    let visible_fill = fill(&app);
+    let out = render(&app);
+    assert!(!out.contains("z hide"), "visible and collapsed, the hide key waits under `?`");
+
+    app.toggle_navigator_hidden();
+    let hidden_fill = fill(&app);
+    assert!(
+        hidden_fill > visible_fill && hidden_fill > 120,
+        "the cursor row fills the whole body with surface2: {hidden_fill} vs {visible_fill}"
+    );
+    let out = render(&app);
+    assert!(out.contains("z show"), "the collapsed footer names the way back");
+
+    app.toggle_keys();
+    let out = render(&app);
+    assert!(out.contains("z show"), "row 1 keeps the way back in the expansion");
+    assert!(!out.contains("p position"), "`p position` drops while hidden");
+
+    app.toggle_navigator_hidden();
+    let out = render(&app);
+    assert!(out.contains("z hide"), "visible, the `go` band lists the hide key");
+    assert!(out.contains("p position"), "`p position` returns with the navigator");
+}
+
+#[test]
 fn shows_tab_bar_file_list_and_diff() {
     let app = edited_app();
     let out = render(&app);
@@ -1252,12 +1288,12 @@ fn rebound_app(keybindings: &str) -> App {
 
 #[test]
 fn hints_show_the_first_bound_key() {
-    let app = rebound_app("comment = [\"ㅊ\", \"c\"]\ntab-pr = [\"z\"]\n");
+    let app = rebound_app("comment = [\"ㅊ\", \"c\"]\ntab-pr = [\"g\"]\n");
     let out = render(&app);
     let footer = footer_line(&out);
     // A wide hint key spans two buffer cells, so the dump carries a placeholder space after it.
     assert!(footer.contains("ㅊ  comment"), "the hint is the first bound key:\n{footer}");
-    assert!(out.contains("z PR"), "the header tab hint follows its binding:\n{out}");
+    assert!(out.contains("g PR"), "the header tab hint follows its binding:\n{out}");
     assert!(!out.contains("3 PR"), "the replaced digit is gone:\n{out}");
 }
 

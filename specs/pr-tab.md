@@ -6,7 +6,7 @@ Last edited: 2026-07-31
 
 # PR tab
 
-A read-only mirror of the pull request in reviewr's two-pane frame: identity in the header, checks and comments in the navigator, the selected body in the read pane.
+A read-only mirror of the pull request in reviewr's frame: identity in the header, checks and comments in the navigator, the selected body in the read pane.
 
 ## Overview
 

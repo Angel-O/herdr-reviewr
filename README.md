@@ -106,43 +106,44 @@ The keys below are defaults. You can rebind every action, even to several keys a
 | --- | --- |
 | `1` `2` `3` | Switch tab — Changes / All files / PR |
 | `u` `b` `t` | Switch scope — uncommitted / branch / last turn |
-| `j` `k` · `↑` `↓` | Move the cursor in the focused pane |
-| `]` `[` | Jump to the next / previous hunk — press again at a file's edge to cross into the adjacent file |
-| `f` `F` | Jump to the next / previous file |
+| `j` `k` · `↑` `↓` | Move cursor |
+| `]` `[` | Jump to next / previous hunk |
+| `f` `F` | Jump to next / previous file |
 | `PageUp` `PageDown` | Move a page |
 | `Ctrl+U` `Ctrl+D` | Move a half-page |
-| `Tab` | Switch focus between the navigator and read pane |
-| `→` `←` | Expand or collapse a directory or fold, or scroll the diff sideways |
-| `/` | Search files and code from any tab — type to filter, then pick a result with `↑` `↓` and open it with `enter` |
-| `Ctrl+F` | Find in the open file — every match lights up, `enter` and the arrows step between them |
+| `Tab` | Switch focus |
+| `→` `←` | Expand / collapse, or scroll sideways |
+| `/` | Search files and code |
+| `Ctrl+F` | Find in file |
 | `w` | Toggle line wrap |
-| `m` | Toggle the markdown preview of a `.md` file (Changes or All files) |
-| `p` | Move the navigator clockwise: right / bottom / left / top |
-| `<` `>` | Grow / shrink the navigator |
-| `r` | Refresh now |
-| `?` | Show every shortcut that works in the current context |
+| `m` | Preview markdown file |
+| `p` | Rotate navigator |
+| `z` | Hide / show navigator |
+| `<` `>` | Grow / shrink navigator |
+| `r` | Refresh |
+| `?` | Open shortcuts helper |
 | `q` | Quit |
 
 **Reviewing** (in the diff)
 
 | Key | Action |
 | --- | --- |
-| `v` | Start a line selection, then `j` / `k` to extend (or click-drag) |
-| `c` | Comment on the selection — or on the current line |
-| `e` `d` | Edit / delete the comment under the cursor |
-| `n` `N` | Jump to the next / previous comment |
-| `l` | List every comment |
-| `s` | Send all comments to the agent |
-| `y` | Copy all comments to the clipboard |
-| `esc` | Clear the selection |
+| `v` | Select lines |
+| `c` | Comment on line or selection |
+| `e` `d` | Edit / delete comment |
+| `n` `N` | Jump to next / previous comment |
+| `l` | List all comments |
+| `s` | Send comments to agent |
+| `y` | Copy comments to clipboard |
+| `esc` | Clear selection |
 
 **In the comment box**
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Save the comment |
+| `Enter` | Save comment |
 | `Esc` | Cancel |
-| `Shift+Enter` · `Alt+Enter` · `Ctrl+J` | Insert a newline |
+| `Shift+Enter` · `Alt+Enter` · `Ctrl+J` | Insert newline |
 
 Plus the usual caret moves: arrows, `Home` / `End`, `Ctrl+A` / `Ctrl+E`, `Alt+b` / `Alt+f` word
 jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
@@ -151,9 +152,9 @@ jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
 
 | Key | Action |
 | --- | --- |
-| `j` `k` | Move through the description and comments |
-| `PageUp` `PageDown` | Scroll the focused pane |
-| `o` | Open the PR in your browser |
+| `j` `k` | Move through description and comments |
+| `PageUp` `PageDown` | Scroll focused pane |
+| `o` | Open PR in browser |
 | `r` | Refresh |
 
 The mouse works too: click files and tabs, drag to select, scroll. A link in rendered markdown
@@ -257,7 +258,8 @@ navigator_position = "bottom"
 ```
 
 Side layouts start at 32% of the width (15–60%), stacked at 25% of the height (15–50%), each
-remembered separately for the session. `<` grows, `>` shrinks, or drag the divider.
+remembered separately for the session. `<` grows, `>` shrinks, or drag the divider. `z` hides
+the navigator altogether and brings it back.
 
 ### Base branch
 
@@ -299,6 +301,7 @@ The action names and their defaults:
 | `wrap` | `w` |
 | `preview` | `m` |
 | `navigator-position` | `p` |
+| `navigator-hide` | `z` |
 | `navigator-grow` / `navigator-shrink` | `<` / `>` |
 | `select` | `v` |
 | `comment` | `c` |

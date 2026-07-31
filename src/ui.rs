@@ -59,11 +59,14 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.tab == Tab::Pr {
         render_pr_header(frame, app, p.tab);
         render_pr_read(frame, app, p.diff);
+        // `PR` never hides its navigator (specs/tui.md), so no hidden gate here.
         render_pr_nav(frame, app, p.files);
     } else {
         render_tab_bar(frame, app, p.tab);
         render_diff_view(frame, app, p.diff);
-        render_file_list(frame, app, p.files);
+        if !app.navigator_hidden_here() {
+            render_file_list(frame, app, p.files);
+        }
     }
     // One footer band on every tab, drawn after the per-tab base so it sits on both layouts.
     render_footer(frame, app, p.status);
@@ -125,7 +128,13 @@ struct Panes {
 fn panes(area: Rect, app: &App) -> Panes {
     let rows = vrows(area, app);
     let body = rows[1];
-    let (diff, files) = split_body(body, app.navigator_position, app.navigator_share());
+    // A hidden navigator gives the read pane the whole body. The zero-sized files rect keeps
+    // every hit-test missing it by construction (`specs/tui.md`).
+    let (diff, files) = if app.navigator_hidden_here() {
+        (body, Rect::new(body.x, body.y, 0, 0))
+    } else {
+        split_body(body, app.navigator_position, app.navigator_share())
+    };
     Panes { tab: rows[0], diff, files, body, status: rows[2] }
 }
 
@@ -175,6 +184,11 @@ pub fn body_rect(area: Rect, app: &App) -> Rect {
 /// Whether `(col, row)` lands on the draggable divider between the two panes.
 #[must_use]
 pub fn hit_divider(area: Rect, app: &App, col: u16, row: u16) -> bool {
+    // No divider exists while the navigator is hidden — the zero-sized files rect would
+    // otherwise still seam-match at the body's edge (`specs/tui.md`).
+    if app.navigator_hidden_here() {
+        return false;
+    }
     let p = panes(area, app);
     match app.navigator_position {
         NavigatorPosition::Left => {
@@ -1434,6 +1448,9 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         }
         A::Preview => (hint(K::Preview), if app.preview_active() { "source" } else { "preview" }),
         A::NavigatorPosition => (hint(K::NavigatorPosition), "position"),
+        A::NavigatorHide => {
+            (hint(K::NavigatorHide), if app.navigator_hidden_here() { "show" } else { "hide" })
+        }
         A::Scope => (
             format!(
                 "{}/{}/{}",

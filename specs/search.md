@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-18
-Last edited: 2026-07-20
+Last edited: 2026-07-31
 ---
 
 # Search
@@ -62,8 +62,8 @@ results.
 - A titled rule tops each pane: `results`, and `preview` with the file.
 - The results pane takes half the body by default. Dragging the divider changes the share,
   bounded by the minimum pane sizes (`tui.md`). The share is search's own session value —
-  the review layout's shares are untouched, and the position and resize keys are printable
-  here. A drag cancels by `input.md`'s divider rules.
+  the review layout's shares are untouched, and the position, hide, and resize keys are
+  printable here. A drag cancels by `input.md`'s divider rules.
 - At tiny sizes the input band keeps its one row and the panes divide the rest
   (`tui.md` minimum sizes).
 - The screen opens in `Files` mode. `tab` flips the mode, keeping the query, and paints
