@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-12
-Last edited: 2026-07-13
+Last edited: 2026-08-01
 ---
 
 # Markdown rendering
@@ -56,7 +56,10 @@ The PR tab's description and comment bodies (`pr-tab.md`) and the markdown previ
 - A soft break renders as a space. A hard break starts a new line.
 - Width is measured in terminal display cells.
 - Nesting indents cap at 8 levels. A deeper level renders at the cap.
-- A table's columns size to their widest cell. A table wider than the pane renders as its source text.
+- A table's columns size to their widest cell. An over-wide table shrinks its widest column, repeatedly, until it fits the pane. Tied widest columns shrink together.
+- A cell in a shrunk column wraps at word boundaries inside its column. A word wider than the column hard-breaks. The column separators continue on every wrapped line.
+- A column never shrinks below the smaller of its natural width and 8 cells. A table still over-wide at every floor renders as its source text.
+- A dim rule follows the header row. No separator line divides one body row from the next, however deep the cells wrap.
 
 ### Links
 
@@ -71,7 +74,7 @@ The PR tab's description and comment bodies (`pr-tab.md`) and the markdown previ
 ### Input safety
 
 - A control character or an explicit bidirectional override renders as a visible placeholder, never raw.
-- A render is cached by its input text. A refresh with unchanged text recomputes nothing.
+- A render is cached by its input text and pane width. A refresh with unchanged text recomputes nothing.
 
 ## Failure semantics
 

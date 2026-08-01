@@ -21,6 +21,10 @@ const MAX_NEST: usize = 8;
 /// The indent code-block lines carry inside their block.
 const CODE_INDENT: &str = "  ";
 
+/// A shrunk table column never drops below this width (or its natural width, when
+/// smaller), so wrapped cells stay readable (`specs/markdown.md`).
+const COL_FLOOR: usize = 8;
+
 /// Rendered markdown: the styled lines, one metadata entry per line in lockstep, and
 /// the document's heading anchors — the position mapping and link hit-testing the
 /// surfaces consume (`specs/diff-view.md`, `specs/markdown.md`).
@@ -584,8 +588,9 @@ impl Renderer<'_> {
         self.needs_blank = true;
     }
 
-    /// Close a table: aligned columns with a bold header and dim rules when it fits the
-    /// pane, its dim source text otherwise (`specs/markdown.md`).
+    /// Close a table: aligned columns with a bold header, an over-wide table shrinking
+    /// its widest column and wrapping that column's cells, and dim source text only when
+    /// the column floors still overflow the pane (`specs/markdown.md`).
     fn end_table(&mut self) {
         let Some(table) = self.table.take() else {
             return;
@@ -606,10 +611,47 @@ impl Renderer<'_> {
                 widths[i] = widths[i].max(cell_text(cell).width());
             }
         }
-        let total: usize = widths.iter().sum::<usize>() + 3 * cols.saturating_sub(1);
+        // An over-wide table shrinks its widest columns, never below their floors: each
+        // pass levels every widest column down toward the next-highest width or its
+        // floor, whichever is larger, so cost is bounded by the column count, not by
+        // how over-wide a cell's content is. Tied widest columns shrink together, as
+        // the reference renderers do (`specs/markdown.md`).
+        let floors: Vec<usize> = widths.iter().map(|w| (*w).min(COL_FLOOR)).collect();
+        let sep_total = 3 * cols.saturating_sub(1);
+        let mut deficit = (widths.iter().sum::<usize>() + sep_total).saturating_sub(budget);
+        while deficit > 0 {
+            let Some(hi) = (0..cols).filter(|&i| widths[i] > floors[i]).map(|i| widths[i]).max()
+            else {
+                break;
+            };
+            let ties: Vec<usize> =
+                (0..cols).filter(|&i| widths[i] == hi && hi > floors[i]).collect();
+            let step = (0..cols)
+                .map(|j| widths[j])
+                .filter(|&w| w < hi)
+                .chain(ties.iter().map(|&i| floors[i]))
+                .max()
+                .expect("ties are non-empty");
+            let room = (hi - step) * ties.len();
+            if room >= deficit {
+                let per = deficit / ties.len();
+                let extra = deficit % ties.len();
+                // The rightmost ties give up the remainder cell, so the split is exact.
+                for (k, &i) in ties.iter().rev().enumerate() {
+                    widths[i] = hi - per - usize::from(k < extra);
+                }
+                deficit = 0;
+            } else {
+                for &i in &ties {
+                    widths[i] = step;
+                }
+                deficit -= room;
+            }
+        }
+        let total: usize = widths.iter().sum::<usize>() + sep_total;
 
-        if total > budget {
-            // Wider than the pane: the table renders as its source text instead.
+        if deficit > 0 {
+            // Over-wide at every floor: the table renders as its source text instead.
             let style = Style::default().fg(self.p.overlay0);
             let src = self.source.get(table.range.clone()).unwrap_or("");
             for src_line in src.trim_end_matches('\n').split('\n') {
@@ -622,34 +664,69 @@ impl Renderer<'_> {
         let dim = Style::default().fg(self.p.overlay0);
         for (r, row) in table.rows.iter().enumerate() {
             let head = r < table.head_rows;
-            let lead = if r == 0 { first.clone() } else { cont.clone() };
-            let mut spans: Vec<Span<'static>> = vec![lead];
-            let mut links: Vec<LinkSpan> = Vec::new();
-            let mut col = cont.width();
-            for (i, width) in widths.iter().enumerate() {
-                if i > 0 {
-                    spans.push(Span::styled(" │ ", dim));
-                    col += 3;
-                }
-                let cell = row.get(i).map_or(&[][..], Vec::as_slice);
-                let mut used = 0;
-                for c in cell {
-                    let style = if head { c.style.add_modifier(Modifier::BOLD) } else { c.style };
-                    let w = c.text.width();
-                    if let Some(id) = c.link {
-                        links.push(LinkSpan {
-                            start: col + used,
-                            end: col + used + w,
-                            url: self.urls[id].clone(),
-                        });
+            let style_of =
+                |c: &Chunk| if head { c.style.add_modifier(Modifier::BOLD) } else { c.style };
+            // A cell that fits its column emits verbatim, spaces and all; only a cell
+            // wider than its shrunk column wraps inside it (`specs/markdown.md`). The
+            // row is as tall as its tallest cell.
+            let cells: Vec<Vec<WrappedLine>> = (0..cols)
+                .map(|i| {
+                    let cell = row.get(i).map_or(&[][..], Vec::as_slice);
+                    if cell_text(cell).width() <= widths[i] {
+                        let mut spans: Vec<Span<'static>> = Vec::new();
+                        let mut links: Vec<(usize, usize, usize)> = Vec::new();
+                        let mut used = 0;
+                        for c in cell {
+                            let w = c.text.width();
+                            if let Some(id) = c.link {
+                                match links.last_mut() {
+                                    Some((_, end, last)) if *last == id && *end == used => {
+                                        *end += w;
+                                    }
+                                    _ => links.push((used, used + w, id)),
+                                }
+                            }
+                            used += w;
+                            spans.push(Span::styled(c.text.clone(), style_of(c)));
+                        }
+                        if spans.is_empty() { Vec::new() } else { vec![(spans, links)] }
+                    } else {
+                        let fragments: Vec<Fragment> =
+                            cell.iter().map(|c| (c.text.clone(), style_of(c), c.link)).collect();
+                        wrap_fragments(&fragments, widths[i], true)
                     }
-                    used += w;
-                    spans.push(Span::styled(c.text.clone(), style));
+                })
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(0).max(1);
+            let mut cells: Vec<std::vec::IntoIter<WrappedLine>> =
+                cells.into_iter().map(Vec::into_iter).collect();
+            for l in 0..height {
+                let lead = if r == 0 && l == 0 { first.clone() } else { cont.clone() };
+                let mut spans: Vec<Span<'static>> = vec![lead];
+                let mut links: Vec<LinkSpan> = Vec::new();
+                let mut col = cont.width();
+                for (i, width) in widths.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::styled(" │ ", dim));
+                        col += 3;
+                    }
+                    let mut used = 0;
+                    if let Some((cell_spans, cell_links)) = cells[i].next() {
+                        for (start, end, id) in cell_links {
+                            links.push(LinkSpan {
+                                start: col + start,
+                                end: col + end,
+                                url: self.urls[id].clone(),
+                            });
+                        }
+                        used = cell_spans.iter().map(Span::width).sum();
+                        spans.extend(cell_spans);
+                    }
+                    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                    col += width;
                 }
-                spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-                col += width;
+                self.push_line(Line::from(spans), links);
             }
-            self.push_line(Line::from(spans), links);
             if head && r + 1 == table.head_rows {
                 self.push_plain_line(Line::from(vec![
                     cont.clone(),
@@ -1037,6 +1114,107 @@ mod tests {
         assert!(t[0].starts_with("| alpha"), "source text shows, wrapped: {t:?}");
         let joined = t.concat();
         assert!(joined.contains("123456789") && joined.contains("987654321"), "{t:?}");
+    }
+
+    #[test]
+    fn an_over_wide_table_shrinks_its_widest_column_and_wraps() {
+        let (hl, p) = setup();
+        // Natural widths: id 2, note 26; at pane 24 the note column shrinks to 19 and
+        // wraps, the id column keeps its natural width, one dim rule under the header.
+        let md = "| id | note |\n|---|---|\n| a | wraps beyond the pane edge |\n| b | short |";
+        let t = texts(&render_lines(md, 24, &hl, &p));
+        assert_eq!(t[0].trim_end(), "id │ note");
+        assert!(t[1].chars().all(|c| c == '─'), "one dim rule under the header: {t:?}");
+        assert_eq!(t[2].trim_end(), "a  │ wraps beyond the");
+        assert_eq!(t[3].trim_end(), "   │ pane edge", "the wrap continues the separator");
+        assert_eq!(t[4].trim_end(), "b  │ short", "the next body row follows directly");
+        assert_eq!(t.len(), 5, "no separator line between body rows: {t:?}");
+        assert!(t.iter().all(|l| l.chars().count() <= 24), "grid fits the pane: {t:?}");
+    }
+
+    #[test]
+    fn a_word_wider_than_its_shrunk_column_hard_breaks_inside_it() {
+        let (hl, p) = setup();
+        let md = "| k | url |\n|---|---|\n| x | https://example.com/very/long/path |";
+        let t = texts(&render_lines(md, 16, &hl, &p));
+        let rows: Vec<&String> = t.iter().filter(|l| l.contains('│')).collect();
+        assert!(rows.len() > 2, "the URL hard-breaks across several rows: {t:?}");
+        for line in &rows {
+            assert_eq!(line.chars().position(|c| c == '│'), Some(2), "aligned: {line:?}");
+            assert!(line.chars().count() <= 16, "every row stays in the pane: {line:?}");
+        }
+        let joined: String = t.iter().filter_map(|l| l.split('│').nth(1)).map(str::trim).collect();
+        assert!(joined.contains("https://example.com/very/long/path"), "{t:?}");
+    }
+
+    #[test]
+    fn a_fitting_cell_preserves_verbatim_spacing() {
+        let (hl, p) = setup();
+        // A code span keeps its interior run of spaces when the cell never wraps.
+        let md = "| k |\n|---|\n| `a    b` |";
+        let t = texts(&render_lines(md, 40, &hl, &p));
+        assert!(t.iter().any(|l| l.contains("a    b")), "code spacing survives: {t:?}");
+    }
+
+    #[test]
+    fn a_table_over_wide_at_every_floor_falls_back_to_source() {
+        let (hl, p) = setup();
+        // Three columns floor at 8 cells each: 30 total, over a 20-cell pane.
+        let md = "| aaaaaaaaaa | bbbbbbbbbb | cccccccccc |\n|---|---|---|\n| 1 | 2 | 3 |";
+        let t = texts(&render_lines(md, 20, &hl, &p));
+        assert!(t[0].starts_with("| aaaaaaaaaa"), "source text shows: {t:?}");
+        let joined = t.concat();
+        for cell in ["bbbbbbbbbb", "cccccccccc", "| 1 |", "2", "3"] {
+            assert!(joined.contains(cell), "the whole source survives: {t:?}");
+        }
+    }
+
+    #[test]
+    fn tied_widest_columns_shrink_together() {
+        let (hl, p) = setup();
+        // Two 12-cell columns at a 21-cell pane split the deficit evenly: 9 cells each.
+        let md = "| aaaaaaaaaaaa | bbbbbbbbbbbb |\n|---|---|\n| x | y |";
+        let t = texts(&render_lines(md, 21, &hl, &p));
+        assert_eq!(t[0], "aaaaaaaaa │ bbbbbbbbb");
+        for line in t.iter().filter(|l| l.contains('│')) {
+            assert_eq!(line.chars().position(|c| c == '│'), Some(10), "even split: {line:?}");
+        }
+    }
+
+    #[test]
+    fn a_column_shrinks_to_its_floor_and_still_renders() {
+        let (hl, p) = setup();
+        // Natural widths: elem 4, prose 24; a 15-cell pane leaves the prose column
+        // exactly its 8-cell floor, and the table still renders as a grid.
+        let md = "| elem | wraps at the floor width |\n|---|---|\n| a | b |";
+        let t = texts(&render_lines(md, 15, &hl, &p));
+        assert!(!t[0].starts_with('|'), "a grid, not source fallback: {t:?}");
+        assert_eq!(t[0].trim_end(), "elem │ wraps at", "the prose column sits at 8 cells");
+        for line in t.iter().filter(|l| l.contains('│')) {
+            assert_eq!(line.chars().position(|c| c == '│'), Some(5), "aligned: {line:?}");
+            assert!(line.chars().count() <= 15, "every row fits the pane: {line:?}");
+        }
+    }
+
+    #[test]
+    fn a_link_in_a_wrapped_cell_is_clickable_on_every_row() {
+        let (hl, p) = setup();
+        let md = "| a |\n|---|\n| [alpha beta gamma delta](https://x.dev/l) |";
+        let r = render(md, 14, &hl, &p);
+        let with_links: Vec<usize> =
+            (0..r.meta.len()).filter(|&i| !r.meta[i].links.is_empty()).collect();
+        assert!(
+            with_links.len() >= 2,
+            "the cell wraps, every row clickable: {:?}",
+            texts(&r.lines)
+        );
+        for i in with_links {
+            let line = text_of(&r.lines[i]);
+            for l in &r.meta[i].links {
+                assert_eq!(&*l.url, "https://x.dev/l");
+                assert!(!line[l.start..l.end].trim().is_empty(), "{line:?} at {l:?}");
+            }
+        }
     }
 
     #[test]
