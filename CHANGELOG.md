@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-08-01
+
+### Changed
+- **Table cell wrapping.** An over-wide table now shrinks its widest columns and wraps their
+  cells instead of falling back to raw source. Tied columns shrink together. Each column keeps
+  at least 8 cells, and only a table too wide at every floor still renders as its source text.
+
 ## [0.28.0] — 2026-07-31
 
 ### Added
