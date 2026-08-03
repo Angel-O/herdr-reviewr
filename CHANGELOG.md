@@ -12,6 +12,129 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   built-in renderer remains the default and failure fallback. PR descriptions and comments keep
   their built-in clickable links and heading jumps.
 
+## [0.29.0] — 2026-08-01
+
+### Changed
+- **Table cell wrapping.** An over-wide table now shrinks its widest columns and wraps their
+  cells instead of falling back to raw source. Tied columns shrink together. Each column keeps
+  at least 8 cells, and only a table too wide at every floor still renders as its source text.
+
+## [0.28.0] — 2026-07-31
+
+### Added
+- **Hide the navigator.** `z` hides the files navigator so the diff takes the whole body, and
+  shows it again in its kept position and share. While hidden, `tab` brings it back focused,
+  the footer offers `z show`, and the `PR` tab keeps its navigator. Rebind via `navigator-hide`.
+
+## [0.27.1] — 2026-07-31
+
+### Fixed
+- **The stable launch paths now survive the install.** The installer's build step runs in a
+  staging checkout that herdr renames afterwards, so the `~/.local/bin/herdr-reviewr` and
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` links pointed at a
+  directory that no longer existed. Every toggle, open, close, or auto-open now re-points
+  both links at the live plugin root, and the installer aims them at the runtime root when
+  herdr provides one.
+
+## [0.27.0] — 2026-07-31
+
+### Added
+- **Any pane running the binary is a full reviewr pane.** A layout plugin or a hand-typed
+  command launches reviewr with `command = "herdr-reviewr"` and gets the same pane the
+  toggle opens: the binary asks herdr for your plugin config when `HERDR_PLUGIN_CONFIG_DIR`
+  is not set, and the toggle, open, and close actions recognize every reviewr pane by its
+  foreground process instead of a label. The installer links the binary at the stable paths
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` and
+  `~/.local/bin/herdr-reviewr`, so layouts have a fixed command to name. (#20)
+
+### Changed
+- **The sidebar is now the pane.** The action titles read "reviewr: toggle/open/close pane",
+  and the docs follow. The keybindings and action ids are unchanged.
+
+## [0.26.2] — 2026-07-29
+
+### Fixed
+- **Send arrives intact when the agent input is in vim normal mode.** The batch went to the
+  agent as raw bytes, so a vim-style input resting in normal mode ran its leading characters
+  as commands: `bit/…` arrived as `t/…`, and a batch starting with `dd` could edit whatever
+  was already typed. The send now travels as one bracketed paste, which the input inserts
+  literally in any mode. A paste terminator inside the batch is removed so it cannot end the
+  frame early. The clipboard export is unchanged. (#41)
+
+## [0.26.1] — 2026-07-28
+
+### Fixed
+- **A `tab`-placement sidebar is now labeled in the tab bar.** herdr gives a fresh tab a bare
+  number, so the sidebar showed up as a stray like `4` and got closed as clutter. It now names
+  the tab `reviewr`. The rename is best-effort, so an open that already succeeded never fails
+  because the rename did.
+
+## [0.26.0] — 2026-07-28
+
+### Changed
+- **Last turn works with any number of agents, in any sidebar placement.** A turn now belongs to
+  the worktree rather than to one agent reviewr had to guess at. Work starts when any agent in the
+  worktree starts and ends when they all stop, so two agents on one worktree read as one turn
+  instead of stalling the scope. Before, anything reviewr could not resolve to exactly one agent
+  left `last turn` waiting forever, which is what happened with a second agent around or with the
+  sidebar in its own tab. The `PR` tab's per-turn refresh was stuck the same way and comes back
+  with it.
+- **Last turn says why it is empty.** It reads `no agent works here` when nothing is running in the
+  worktree, and `waiting for the first turn` when an agent is there but has not started yet. The
+  old single message claimed a turn was coming even when none could.
+- **reviewr now needs herdr 0.7.5.** Worktree turns read each agent's working directory from
+  `herdr agent list`, which older versions are not known to report.
+
+### Fixed
+- **The `PR` tab refreshes after a turn you answered a prompt in.** A turn that went from working
+  to a permission prompt and then straight to idle never registered as having ended, so the tab
+  skipped its per-turn refetch for it.
+
+## [0.25.1] — 2026-07-27
+
+### Changed
+- **Selected rows keep their dim parts readable.** A row's secondary text used to all but vanish
+  under the selection fill. It now brightens with the fill, in every list that has one: the file
+  list's indent, a search hit's line number, and a picker row's state and tab.
+
+### Fixed
+- **A failed send says something you can read.** When `herdr` refused a send, the status filled
+  with the command reviewr had run, which carries your whole review as one argument. A 40-column
+  footer answered with a fragment of your own comments. It now says `agent not found`. herdr's own
+  wording is a JSON envelope around a pane id, so that goes to the log and never to you.
+- **A chord never sends by accident.** `Alt+Enter` and `Shift+Enter` mean "newline, not submit" in
+  the comment editor, and they used to send the whole review from the agent picker. Only the
+  unmodified `enter` sends now. Modified digits no longer move the highlight either.
+- **The footer never spends its width twice.** On a pane too narrow to show a long status, the
+  footer used to drop the cursor's actions to make room for it and then drop the status too,
+  leaving the row with neither. A status that cannot be shown now costs the row nothing.
+- **The picker keeps its keys on the PR tab.** A picker opened there would have handed `q` and the
+  digits to the tab behind it.
+
+## [0.25.0] — 2026-07-26
+
+### Added
+- **Send picks the agent when there are several.** `Send` used to refuse in a workspace with more
+  than one agent, leaving the clipboard as the only route, which reaches nothing when you review
+  over SSH. It now opens a picker listing every agent in the workspace. Move with the arrows or
+  `j`/`k`, jump with `1`–`9`, `enter` sends, `esc` keeps every comment. A click highlights a row,
+  and a click on the highlighted row sends. The highlight opens on the agent you sent to last,
+  marked `last used`, else the agent the sidebar was opened beside. A successful send names the
+  agent it went to.
+- **Modals own the screen.** While the picker or the comments list is open, everything behind it
+  dims toward the theme background. The footer stays bright with the modal's own keys.
+
+### Changed
+- One agent still sends straight through, with no picker. Turn tracking is unchanged.
+
+### Fixed
+- **The status survives a narrow sidebar.** A message longer than the room left on the footer's
+  first row used to vanish outright, so a 40-column pane answered `s` with nothing at all. It named
+  neither the agent it reached nor the reason it refused. The status now truncates to fit, and the
+  cursor's actions step aside for it, since `?` already lists them.
+- **A picker row names any state herdr reports.** An agent status reviewr had never heard of read
+  `unknown` on the row. The row now shows herdr's own spelling for it, and herdr's own label.
+
 ## [0.24.1] — 2026-07-23
 
 ### Changed

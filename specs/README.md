@@ -44,7 +44,7 @@ Each concern lives in the one doc that owns it. A change is woven into that doc,
 
 ## The bar
 
-A spec is a communication medium between the agent and the humans on the project. It is never a scratchpad. Human reading speed and understanding come first, in every edit.
+A spec is the set of decisions currently in force, written so nobody re-decides one unknowingly. Every sentence is a decision: name the alternative that lost, or it is a forgery. Human reading speed comes first, in every edit.
 
 - One fact per sentence. Linear sentences, no asides.
 - One grammatical template per list or table. Schema-first tables.
@@ -52,7 +52,7 @@ A spec is a communication medium between the agent and the humans on the project
 - Every collection is complete under one stated admission rule.
 - Contract only: mechanism lives in the code, rationale in the PR, provenance in git.
 - One home per fact. Link to that home everywhere else.
-- Only cross-operation constraints on valid state are invariants. Code one (`CFG-WHOLE-FILE`) only when it needs a stable citation.
+- Invariants are the decisions that constrain other decisions. Every one carries a code (`CFG-WHOLE-FILE`).
 - Use an example when it teaches faster. Headers `###` max. Under ~2,000 words per doc.
 
 The full bar lives in [`AGENTS.md`](./AGENTS.md).

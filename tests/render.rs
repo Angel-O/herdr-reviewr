@@ -6,6 +6,7 @@ mod common;
 use common::{Repo, app_on, enter_tab};
 use herdr_reviewr::app::{App, Focus, Tab};
 use herdr_reviewr::config::NavigatorPosition;
+use herdr_reviewr::herdr::AgentChoice;
 use herdr_reviewr::keymap::Keymap;
 use herdr_reviewr::model::Scope;
 use herdr_reviewr::ui::{self, HeaderHit};
@@ -79,7 +80,7 @@ fn composing(app: &mut App) {
 }
 
 #[test]
-fn invalid_config_replaces_the_entire_sidebar_with_its_error() {
+fn invalid_config_replaces_the_entire_pane_with_its_error() {
     let mut app = edited_app();
     app.set_config_error(
         "config /tmp/reviewr/config.toml: invalid value for `theme`; expected a built-in theme name"
@@ -91,7 +92,7 @@ fn invalid_config_replaces_the_entire_sidebar_with_its_error() {
     assert!(out.contains("config /tmp/reviewr/config.toml"));
     assert!(out.contains("expected a built-in theme name"));
     assert!(out.contains("The config reloads automatically."));
-    assert!(!out.contains("Changes"), "normal sidebar chrome must be hidden");
+    assert!(!out.contains("Changes"), "normal reviewr chrome must be hidden");
 }
 
 #[test]
@@ -371,6 +372,42 @@ fn the_selected_file_row_fills_with_the_shared_selection_color() {
 }
 
 #[test]
+fn a_hidden_navigator_gives_the_read_pane_the_whole_body() {
+    let mut app = edited_app();
+    app.focus = Focus::Diff;
+    app.next_hunk();
+    let cursor_y = 2 + app.diff_cursor as u16;
+    let fill = |app: &App| {
+        let buf = render_buffer(app);
+        (1..139u16)
+            .filter(|&x| buf.cell((x, cursor_y)).is_some_and(|c| c.bg == SELECTION_BG))
+            .count()
+    };
+    let visible_fill = fill(&app);
+    let out = render(&app);
+    assert!(!out.contains("z hide"), "visible and collapsed, the hide key waits under `?`");
+
+    app.toggle_navigator_hidden();
+    let hidden_fill = fill(&app);
+    assert!(
+        hidden_fill > visible_fill && hidden_fill > 120,
+        "the cursor row fills the whole body with surface2: {hidden_fill} vs {visible_fill}"
+    );
+    let out = render(&app);
+    assert!(out.contains("z show"), "the collapsed footer names the way back");
+
+    app.toggle_keys();
+    let out = render(&app);
+    assert!(out.contains("z show"), "row 1 keeps the way back in the expansion");
+    assert!(!out.contains("p position"), "`p position` drops while hidden");
+
+    app.toggle_navigator_hidden();
+    let out = render(&app);
+    assert!(out.contains("z hide"), "visible, the `go` band lists the hide key");
+    assert!(out.contains("p position"), "`p position` returns with the navigator");
+}
+
+#[test]
 fn shows_tab_bar_file_list_and_diff() {
     let app = edited_app();
     let out = render(&app);
@@ -488,6 +525,78 @@ fn a_narrow_row_keeps_send_and_the_more_hint_by_shedding_the_primary_label() {
     assert!(narrow.contains("s send 1"), "send never drops:\n{narrow}");
     assert!(narrow.trim_end().ends_with('?'), "the `?` never drops:\n{narrow}");
     assert!(narrow.chars().count() <= 16, "the row never overflows its width:\n{narrow}");
+}
+
+#[test]
+fn a_status_too_long_to_paint_never_costs_the_row_the_actions_that_fit() {
+    let mut app = edited_app();
+    on_changed_line(&mut app);
+    app.start_comment();
+    app.input_push('n');
+    app.submit_comment(); // a written comment adds `s send 1` to row 1
+
+    // A herdr failure is the longest line the status ever carries. Where the row has no room to
+    // paint any of it, the status must cost nothing: the row falls back to exactly what it shows
+    // with no status at all. Reserving room for a message that then drops would spend the width
+    // twice and paint neither (`specs/input.md`).
+    for w in 14..=140u16 {
+        app.status = "z".repeat(60);
+        let with = footer_line(&render_at(&app, w));
+        app.status = String::new();
+        let without = footer_line(&render_at(&app, w));
+        if !with.contains('z') {
+            assert_eq!(with, without, "width {w} paid for a status it never painted");
+        }
+    }
+}
+
+#[test]
+fn the_footer_shows_the_sends_outcome_at_a_pane_width_by_yielding_the_cursor_actions() {
+    let mut app = edited_app();
+    on_changed_line(&mut app);
+    app.start_comment();
+    app.input_push('n');
+    app.submit_comment(); // a written comment adds `s send 1` to row 1
+
+    // The status is the only answer `s` gives, and a reviewr pane is around 40 columns wide, so
+    // the cursor's actions yield to it: the `?` panel repeats every action and nothing repeats the
+    // status (`specs/input.md`).
+    app.status = "no agent here — copy to the clipboard instead".to_string();
+    let narrow = footer_line(&render_at(&app, 40));
+    assert!(narrow.contains("no agent here"), "the refusal shows at 40 columns:\n{narrow}");
+    assert!(narrow.contains("s send 1"), "send never drops:\n{narrow}");
+    assert!(narrow.trim_end().ends_with('?'), "the `?` never drops:\n{narrow}");
+    assert!(!narrow.contains("d delete"), "the cursor's actions yield to the status:\n{narrow}");
+
+    // With room for both, nothing yields.
+    let wide = footer_line(&render_at(&app, 120));
+    assert!(
+        wide.contains("no agent here — copy to the clipboard instead"),
+        "a wide row shows the whole refusal:\n{wide}"
+    );
+    assert!(wide.contains("d delete"), "and keeps the cursor's actions:\n{wide}");
+
+    // Below a legible width the status drops rather than paint a lone `·` promising a message.
+    let tiny = footer_line(&render_at(&app, 20));
+    assert!(!tiny.contains("agent"), "no room for a legible message, so none is painted:\n{tiny}");
+    assert!(tiny.contains("s send 1"), "send still never drops:\n{tiny}");
+
+    // A truncated status never pushes the `?` off the right edge, at any width that fits row 1's
+    // own fixed parts. Below 14 columns the shed primary and `send` overflow it on their own, with
+    // no status in play at all.
+    for w in 14..=140u16 {
+        let row = footer_line(&render_at(&app, w));
+        assert!(row.trim_end().ends_with('?'), "the `?` left the row at width {w}:\n{row}");
+    }
+
+    // `s` is also the comments list's primary, so a refusal has to reach the reviewer there too.
+    // The list has no `?`, so its trailing `…` is the only promise the trimmed actions exist, and
+    // the status leaves room for it (`specs/input.md`).
+    app.open_list();
+    let listed = footer_line(&render_at(&app, 40));
+    assert!(listed.contains("no agent here"), "the refusal shows in the list at 40:\n{listed}");
+    assert!(listed.contains("s send 1"), "send never drops in the list either:\n{listed}");
+    assert!(listed.trim_end().ends_with('…'), "the trimmed actions keep their `…`:\n{listed}");
 }
 
 #[test]
@@ -1040,15 +1149,43 @@ fn open_list_renders_the_comments_overlay() {
 }
 
 #[test]
-fn last_turn_without_a_baseline_renders_the_waiting_state() {
+fn last_turn_without_an_agent_says_the_worktree_is_empty() {
+    // `specs/herdr-host.md` owns when membership counts as observed; `specs/tui.md` owns the
+    // wording. Only a sample that found no member may say the worktree is empty.
+    let r = Repo::init();
+    r.write("a.rs", "a\n");
+    r.commit_all("init");
+    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
+    app.reload().unwrap();
+    app.sync_agents_present(Some(false));
+    let out = render(&app);
+    assert!(out.contains("[last turn]"), "the scope chip reads last turn");
+    assert!(out.contains("no agent works here"), "the empty-worktree state shows");
+}
+
+#[test]
+fn last_turn_with_an_agent_and_no_turn_yet_waits_for_the_first() {
+    let r = Repo::init();
+    r.write("a.rs", "a\n");
+    r.commit_all("init");
+    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
+    app.reload().unwrap();
+    app.sync_agents_present(Some(true));
+    let out = render(&app);
+    assert!(out.contains("waiting for the first turn"), "the pre-turn state shows");
+}
+
+#[test]
+fn last_turn_before_the_first_sample_waits_rather_than_asserting_emptiness() {
+    // The pre-poll frame has observed nothing, so it may wait but not claim the worktree
+    // is empty — stale is allowed, wrong is not (`specs/overview.md` Continuity).
     let r = Repo::init();
     r.write("a.rs", "a\n");
     r.commit_all("init");
     let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
     app.reload().unwrap();
     let out = render(&app);
-    assert!(out.contains("[last turn]"), "the scope chip reads last turn");
-    assert!(out.contains("waiting for the agent's next turn"), "the cold-start empty state shows");
+    assert!(out.contains("waiting for the first turn"), "the unknown state waits");
 }
 
 #[test]
@@ -1092,7 +1229,7 @@ fn a_narrow_overflowing_header_does_not_mis_map_a_click_to_send() {
     r.write("a.rs", "y\n");
     let app = app_on(&r);
 
-    // At a narrow sidebar width the two-tab header overflows and the Send button is off-screen.
+    // At a narrow pane width the two-tab header overflows and the Send button is off-screen.
     // No on-screen column may map to Send — the old right-aligned hit-zone landed a phantom Send
     // over the chip/tab region, swallowing those clicks as a Send.
     let width: u16 = 34;
@@ -1151,12 +1288,12 @@ fn rebound_app(keybindings: &str) -> App {
 
 #[test]
 fn hints_show_the_first_bound_key() {
-    let app = rebound_app("comment = [\"ㅊ\", \"c\"]\ntab-pr = [\"z\"]\n");
+    let app = rebound_app("comment = [\"ㅊ\", \"c\"]\ntab-pr = [\"g\"]\n");
     let out = render(&app);
     let footer = footer_line(&out);
     // A wide hint key spans two buffer cells, so the dump carries a placeholder space after it.
     assert!(footer.contains("ㅊ  comment"), "the hint is the first bound key:\n{footer}");
-    assert!(out.contains("z PR"), "the header tab hint follows its binding:\n{out}");
+    assert!(out.contains("g PR"), "the header tab hint follows its binding:\n{out}");
     assert!(!out.contains("3 PR"), "the replaced digit is gone:\n{out}");
 }
 
@@ -2433,4 +2570,217 @@ mod search_row_emphasis {
             "the match highlight lands on the match, past the multibyte head",
         );
     }
+}
+
+// --- Agent picker (specs/herdr-host.md) ----------------------------------------------------
+
+fn agent_row(pane: &str, name: &str, state: &str, tab: &str) -> AgentChoice {
+    AgentChoice { pane_id: pane.into(), name: name.into(), state: state.into(), tab: tab.into() }
+}
+
+/// One saved comment on the first added line, so the picker has a count to title itself with.
+fn write_comment(app: &mut App, text: &str) {
+    composing(app);
+    app.input = text.to_string();
+    app.submit_comment();
+}
+
+/// An app with three comments and the picker open, matching the spec's mockup.
+fn picker_app() -> App {
+    let mut app = edited_app();
+    for text in ["one", "two", "three"] {
+        write_comment(&mut app, text);
+    }
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
+        agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
+        agent_row("w8:p3", "codex", "working", "3"),
+    ]);
+    app
+}
+
+#[test]
+fn the_last_sent_row_carries_its_tag_and_no_other_row_does() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    // A prior send to release-bot arms the highlight there and tags the row, so the
+    // remembered default reads before `enter` fires it (specs/herdr-host.md).
+    app.last_sent_pane = Some("w8:p2".to_string());
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "1"),
+        agent_row("w8:p2", "release-bot", "idle", "2"),
+    ]);
+    assert_eq!(app.picker_cursor, 1, "the highlight arms on the last-sent agent");
+    let out = render(&app);
+
+    let tagged = out.lines().find(|l| l.contains("release-bot")).unwrap_or_default();
+    assert!(tagged.contains("· last used"), "the last-sent row is tagged: {tagged:?}");
+    let plain = out.lines().find(|l| l.contains("claude")).unwrap_or_default();
+    assert!(!plain.contains("last used"), "no other row is tagged: {plain:?}");
+}
+
+#[test]
+fn an_open_picker_dims_the_view_behind_it_but_never_the_footer() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let plain = render_buffer(&app);
+    app.open_picker(vec![
+        agent_row("w8:p1", "claude", "idle", "1"),
+        agent_row("w8:p2", "codex", "idle", "2"),
+    ]);
+    let dimmed = render_buffer(&app);
+
+    // The tab bar recedes toward the theme base while the picker is up (specs/tui.md).
+    // Locate a lettered header cell rather than assuming a column, so a header layout
+    // change cannot silently repoint the assertion.
+    let x = (0..plain.area.width)
+        .find(|&x| {
+            plain
+                .cell((x, 0))
+                .is_some_and(|c| c.symbol().chars().all(char::is_alphanumeric) && c.symbol() != " ")
+        })
+        .expect("a lettered cell in the tab bar");
+    let cell = |buf: &Buffer, x: u16, y: u16| buf.cell((x, y)).unwrap().clone();
+    assert_eq!(cell(&plain, x, 0).symbol(), cell(&dimmed, x, 0).symbol());
+    assert_ne!(cell(&plain, x, 0).fg, cell(&dimmed, x, 0).fg, "the header cell is scrimmed");
+
+    // The footer is the picker's own key bar, so its primary hint keeps full brightness.
+    let footer_y = dimmed.area.height - 1;
+    let bright =
+        (0..dimmed.area.width).any(|x| dimmed.cell((x, footer_y)).is_some_and(|c| c.fg == PEACH));
+    assert!(bright, "the footer's primary key hint stays at full brightness");
+}
+
+#[test]
+fn neither_popup_reaches_the_footer_that_advertises_its_keys() {
+    let mut app = edited_app();
+    for text in ["one", "two", "three"] {
+        write_comment(&mut app, text);
+    }
+    let rows = vec![
+        agent_row("w8:p1", "claude", "idle", "Grip Outreach"),
+        agent_row("w8:p2", "release-bot", "idle", "Grip Outreach Campaign"),
+    ];
+
+    // Both popups place through one rule, `body_popup`, so at every pane size the footer keeps
+    // naming the keys the popup is listening for — it is the only surface that does
+    // (`specs/tui.md`).
+    for h in 8..=30u16 {
+        app.open_list();
+        let listed = dump(&render_size(&app, 44, h));
+        app.close_list();
+        app.open_picker(rows.clone());
+        let picked = dump(&render_size(&app, 44, h));
+        app.close_picker();
+
+        for (name, out) in [("comments list", listed), ("agent picker", picked)] {
+            let footer = out.lines().last().unwrap_or_default().to_string();
+            assert!(
+                footer.contains("esc"),
+                "the {name} popup covered the footer at height {h}:\n{out}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_picker_titles_the_count_and_aligns_the_dim_trail_in_one_column() {
+    let app = picker_app();
+    let out = render(&app);
+
+    assert!(out.contains("Send 3 comments to"), "the title counts the comments:\n{out}");
+
+    let rows: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("claude") || l.contains("release-bot") || l.contains("codex"))
+        .collect();
+    assert_eq!(rows.len(), 3, "one row per agent:\n{out}");
+
+    // The names pad to the widest, so every dim trail starts in the same column.
+    let starts: Vec<usize> = rows
+        .iter()
+        .map(|l| l.find("idle").or_else(|| l.find("working")).expect("a state on every row"))
+        .collect();
+    assert!(starts.windows(2).all(|w| w[0] == w[1]), "trails misaligned at {starts:?}:\n{out}");
+
+    // The tab trails behind the state, separated by the dim dot.
+    assert!(rows[0].contains("idle · Grip Outreach"), "{:?}", rows[0]);
+    assert!(rows[2].contains("working · 3"), "{:?}", rows[2]);
+}
+
+#[test]
+fn the_picker_numbers_only_the_rows_a_digit_key_can_reach() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let rows: Vec<AgentChoice> = (1..=11)
+        .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
+        .collect();
+    app.open_picker(rows);
+    let out = render(&app);
+
+    for i in 1..=9 {
+        let row = out.lines().find(|l| l.contains(&format!("agent{i} "))).unwrap_or_default();
+        assert!(row.contains(&format!(" {i}  ")), "row {i} carries its digit: {row:?}");
+    }
+    // Rows past the ninth are reached by movement, so they carry no number to press.
+    let tenth = out.lines().find(|l| l.contains("agent10")).unwrap_or_default();
+    assert!(!tenth.contains(" 10 "), "row 10 must not advertise an unreachable key: {tenth:?}");
+}
+
+#[test]
+fn a_picker_taller_than_the_pane_scrolls_to_keep_the_highlight_visible() {
+    let mut app = edited_app();
+    write_comment(&mut app, "one");
+    let rows: Vec<AgentChoice> = (1..=20)
+        .map(|i| agent_row(&format!("w8:p{i}"), &format!("agent{i}"), "idle", "1"))
+        .collect();
+    app.open_picker(rows);
+
+    // A short frame cannot show twenty rows; the last one is still reachable.
+    let short = dump(&render_size(&app, 80, 12));
+    assert!(!short.contains("agent20"), "the tail is clipped at this height:\n{short}");
+
+    app.picker_goto(19);
+    let scrolled = dump(&render_size(&app, 80, 12));
+    assert!(scrolled.contains("agent20"), "the view follows the highlight:\n{scrolled}");
+
+    // The popup clamps to the body band, so even this over-tall picker never covers the
+    // footer — the one surface advertising its keys (specs/tui.md).
+    let last_row = scrolled.lines().last().unwrap_or_default().to_string();
+    assert!(last_row.contains("enter"), "the footer keeps the picker's keys: {last_row:?}");
+}
+
+#[test]
+fn a_click_on_a_picker_row_moves_the_highlight_and_misses_stay_inert() {
+    let mut app = picker_app();
+    let area = Rect::new(0, 0, 140, 40);
+    let out = render(&app);
+
+    let (row_y, line) = out
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("codex"))
+        .map(|(y, l)| (y as u16, l.to_string()))
+        .expect("the codex row is painted");
+    let col = line.find("codex").expect("a column inside the row") as u16;
+
+    assert_eq!(ui::hit_picker_row(area, &app, col, row_y), Some(2));
+    // The title row and everything outside the popup are inert (specs/input.md).
+    assert_eq!(ui::hit_picker_row(area, &app, col, row_y - 3), None);
+    assert_eq!(ui::hit_picker_row(area, &app, 0, 0), None);
+
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+            column: col,
+            row: row_y,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+        &[],
+        &Keymap::default(),
+    )
+    .unwrap();
+    assert_eq!(app.picker_cursor, 2, "a click moves the highlight to the clicked row");
 }

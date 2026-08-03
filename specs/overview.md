@@ -1,12 +1,12 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-23
+Last edited: 2026-07-31
 ---
 
 # herdr-reviewr
 
-A terminal review sidebar in a herdr pane: browse a coding agent's changes, comment on line ranges, and send the comments back to the agent.
+A terminal review pane for herdr: browse a coding agent's changes, comment on line ranges, and send the comments back to the agent.
 
 ## Overview
 
@@ -74,7 +74,7 @@ State divides into three kinds:
 - Derived state is everything recomputed from git or the forge: changesets, trees, diffs, the PR
   snapshot.
 
-Authored state follows O3. Only the reviewer removes it.
+Authored state survives every world event. Only the reviewer removes it (Invariants).
 
 Place state moves only under the reviewer's own input. A world event may only reconcile it, in
 order: match the same target by identity (a path, a comment's author and anchor — never a row
@@ -87,14 +87,11 @@ Newer content paints over the old in place, reconciling the reviewer's place as 
 
 ## Invariants
 
-| Always true                                                                                                                                                |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The sidebar never commits, stages, or mutates the worktree, the index, or any branch. Its one git write is the private baseline ref under `refs/reviewr/`.  |
-| The sidebar never writes to a forge. It reads the pull request through the forge's official CLI and opens links in the browser, nothing more.               |
-| A comment, saved or being typed, is never lost to a refresh or the agent's edits. Only the user removes it.                                                 |
-| Comments leave only by an explicit export, to the agent pane or the clipboard.                                                                              |
-| The crate forbids `unsafe`.                                                                                                                                 |
-| A refresh never moves the reviewer's place. Reconciliation runs by identity, then fallback, then clamp (see Continuity).                                     |
+| Always true                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| reviewr never commits, stages, or mutates the worktree, the index, or any branch. Its one git write is the private baseline ref under `refs/reviewr/`.      |
+| reviewr never writes to a forge. It reads the pull request through the forge's official CLI and opens links in the browser, nothing more.                   |
+| A comment, saved or being typed, is never lost to a refresh or the agent's edits. Only the reviewer removes it, and only an explicit export takes it out.   |
 
 ## Related specs
 

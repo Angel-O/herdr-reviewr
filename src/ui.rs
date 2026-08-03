@@ -23,6 +23,7 @@ use crate::config::NavigatorPosition;
 use crate::diff::{FileDiff, FileState, Row};
 use crate::file_list::{Annotation, RowKind};
 use crate::forge;
+use crate::herdr::AgentChoice;
 use crate::keymap::Keymap;
 use crate::model::Comment;
 use crate::theme::Palette;
@@ -58,18 +59,49 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.tab == Tab::Pr {
         render_pr_header(frame, app, p.tab);
         render_pr_read(frame, app, p.diff);
+        // `PR` never hides its navigator (specs/tui.md), so no hidden gate here.
         render_pr_nav(frame, app, p.files);
     } else {
         render_tab_bar(frame, app, p.tab);
         render_diff_view(frame, app, p.diff);
-        render_file_list(frame, app, p.files);
+        if !app.navigator_hidden_here() {
+            render_file_list(frame, app, p.files);
+        }
     }
-    // One footer band on every tab, drawn after the per-tab base so it sits on both layouts;
-    // then the comments-list modal on top when it is open.
+    // One footer band on every tab, drawn after the per-tab base so it sits on both layouts.
     render_footer(frame, app, p.status);
 
-    if app.mode == Mode::List {
-        render_comments_list(frame, app, area);
+    // A popup paints last, over the page it scrims. One match decides both the scrim and what
+    // paints, so a mode can never scrim the page and then draw nothing. Both popups place through
+    // `body_popup`, so the footer just drawn stays uncovered and keeps advertising their keys.
+    let popup: Option<fn(&mut Frame, &App, Rect)> = match app.mode {
+        Mode::List => Some(render_comments_list),
+        Mode::Picker => Some(render_agent_picker),
+        Mode::Normal | Mode::Composing { .. } | Mode::Search | Mode::Find => None,
+    };
+    if let Some(render_popup) = popup {
+        scrim_behind(frame, app, area);
+        render_popup(frame, app, area);
+    }
+}
+
+/// Recede everything behind an open modal, except the footer: every painted color in the tab
+/// bar and the body blends halfway to the theme base, so the modal owns the eye while the page
+/// stays recognizable. The footer stays bright — while a modal is open it is the modal's own
+/// key bar, the one place advertising the live keys (`specs/tui.md`, `specs/input.md`).
+fn scrim_behind(frame: &mut Frame, app: &App, area: Rect) {
+    let p = *app.palette();
+    let bands = panes(area, app);
+    let buf = frame.buffer_mut();
+    for band in [bands.tab, bands.body] {
+        for y in band.y..band.y + band.height {
+            for x in band.x..band.x + band.width {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.fg = p.scrim(cell.fg);
+                    cell.bg = p.scrim(cell.bg);
+                }
+            }
+        }
     }
 }
 
@@ -96,7 +128,13 @@ struct Panes {
 fn panes(area: Rect, app: &App) -> Panes {
     let rows = vrows(area, app);
     let body = rows[1];
-    let (diff, files) = split_body(body, app.navigator_position, app.navigator_share());
+    // A hidden navigator gives the read pane the whole body. The zero-sized files rect keeps
+    // every hit-test missing it by construction (`specs/tui.md`).
+    let (diff, files) = if app.navigator_hidden_here() {
+        (body, Rect::new(body.x, body.y, 0, 0))
+    } else {
+        split_body(body, app.navigator_position, app.navigator_share())
+    };
     Panes { tab: rows[0], diff, files, body, status: rows[2] }
 }
 
@@ -146,6 +184,11 @@ pub fn body_rect(area: Rect, app: &App) -> Rect {
 /// Whether `(col, row)` lands on the draggable divider between the two panes.
 #[must_use]
 pub fn hit_divider(area: Rect, app: &App, col: u16, row: u16) -> bool {
+    // No divider exists while the navigator is hidden — the zero-sized files rect would
+    // otherwise still seam-match at the body's edge (`specs/tui.md`).
+    if app.navigator_hidden_here() {
+        return false;
+    }
     let p = panes(area, app);
     match app.navigator_position {
         NavigatorPosition::Left => {
@@ -498,7 +541,7 @@ fn header_suffix(app: &App) -> String {
 /// The column the `Send` button paints at, matching `render_tab_bar`'s layout: right-aligned
 /// when the header fits, packed left right after the suffix when the bar overflows (`pad`
 /// collapses to 0). `hit_header` must use this, not a bare right-alignment, or a `Send` click
-/// mis-fires (and on a narrow sidebar lands in a tab span) when the header overflows.
+/// mis-fires (and on a narrow pane lands in a tab span) when the header overflows.
 fn send_button_col(app: &App, prefix: usize, width: usize) -> usize {
     let before = prefix + scope_chip(app).len() + header_suffix(app).width();
     before + width.saturating_sub(before + send_button(app).len())
@@ -569,7 +612,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
     if app.file_rows.is_empty() {
         let msg = match app.tab {
             Tab::AllFiles => "no files",
-            Tab::Changes if app.awaiting_turn() => "waiting for the agent's next turn",
+            Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => "no changes",
         };
         frame.render_widget(dim_paragraph(msg, p), inner);
@@ -601,7 +644,7 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
                         Span::styled(format!("{indent}{arrow}"), Style::default().fg(p.overlay0)),
                         Span::styled(format!("{}/", row.name), name_style),
                     ];
-                    selectable_row(spans, width, fill)
+                    selectable_row(p, spans, width, fill)
                 }
                 RowKind::File { annotation, .. } => file_row_item(
                     &FileRowSpec {
@@ -686,7 +729,7 @@ fn file_row_item(
         spans.push(Span::raw(" ".repeat(pad)));
         spans.extend(stats_spans(additions, deletions, p));
     }
-    selectable_row(spans, width, fill)
+    selectable_row(p, spans, width, fill)
 }
 
 /// The `+a −d` stats text, dropping a side that is zero (`+210`, `−4`, or empty); used to
@@ -846,7 +889,7 @@ fn render_diff_view(frame: &mut Frame, app: &App, area: Rect) {
                 FileState::Normal if app.diff_path.is_some() => "empty file",
                 FileState::Normal => "select a file to read",
             },
-            Tab::Changes if app.awaiting_turn() => "waiting for the agent's next turn",
+            Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => match app.diff.state {
                 FileState::Binary => "binary — no line comments",
                 FileState::TooLarge => "file too large to diff",
@@ -1368,7 +1411,7 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.peach))
-        .title(title);
+        .title(framed_title(&title));
     let content_w = composer_content_width(area.width as usize);
     let body = Paragraph::new(composer_lines(app, content_w)).block(block);
     frame.render_widget(body, area);
@@ -1405,6 +1448,9 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         }
         A::Preview => (hint(K::Preview), if app.preview_active() { "source" } else { "preview" }),
         A::NavigatorPosition => (hint(K::NavigatorPosition), "position"),
+        A::NavigatorHide => {
+            (hint(K::NavigatorHide), if app.navigator_hidden_here() { "show" } else { "hide" })
+        }
         A::Scope => (
             format!(
                 "{}/{}/{}",
@@ -1419,8 +1465,12 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         A::Copy => (hint(K::Copy), "copy"),
         A::Save => ("enter".into(), "save"),
         A::Newline => ("shift+enter".into(), "newline"),
-        A::Cancel => ("esc".into(), "cancel"),
+        A::Cancel | A::ClosePicker => ("esc".into(), "cancel"),
         A::CloseList | A::CloseSearch | A::CloseFind => ("esc".into(), "close"),
+        A::PickAgent => ("enter".into(), "send"),
+        // The digits are literal, so they are spelled; the two movement keys are bound, so they
+        // read off the keymap like every other hint (`specs/input.md`).
+        A::MovePickerRow => (format!("1-9 {} {}", hint(K::Down), hint(K::Up)), "move"),
         A::Search => (hint(K::Search), "search"),
         A::Find => (hint(K::Find), "find"),
         A::Wrap => (hint(K::Wrap), "wrap"),
@@ -1485,6 +1535,15 @@ fn entry_width(app: &App, action: FooterAction) -> usize {
 /// The ` · ` that joins footer entries, and the dim-label indent of a wrapped `?`-band row.
 const SEP: &str = " · ";
 const BAND_INDENT: usize = 6;
+
+/// The footer status's frame: the two-space gap, the `·`, and the trailing space around it.
+const STATUS_FRAME: usize = 5;
+/// The narrowest status row 1 paints. Below it a lone `·` would promise a message the row has no
+/// room to show, so the status drops instead (`specs/input.md`).
+const STATUS_MIN: usize = 8;
+/// The ` …` a modal footer ends with when an action was trimmed off row 1. It stands in for the
+/// `?` a modal does not have, so it is the only promise that more keys exist.
+const MORE_ELLIPSIS: usize = 2;
 
 /// The footer: row 1 (the primary, the cursor's actions, `send`, and a `?`), plus the wrapped
 /// `?`-expansion bands below when it is open. Row 1 trims trailing actions to fit; the primary,
@@ -1596,13 +1655,32 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
         }
     }
 
+    // The status answers the keypress the reviewer just made and fades on its own clock, so it
+    // outranks the cursor's actions: the `?` panel repeats every action, and nothing repeats the
+    // status (`specs/input.md`). It reserves its room here, before the actions pack into what is
+    // left, so a 40-column pane still shows the send's outcome.
+    //
+    // The reservation is what the status can actually take, never what it wants: capped at the
+    // room that exists, and nothing at all when even that is below `STATUS_MIN`. Reserving the
+    // untruncated width would evict every action for a message the paint below then drops,
+    // leaving a row with neither. The worst-case tail is the same either way, since a trimmed
+    // modal footer spends on its `…` exactly what a `Normal` one spends on its `?`.
+    let status_tail =
+        send_w + if do_acts.is_empty() { reserve } else { reserve.max(MORE_ELLIPSIS) };
+    let free = w.saturating_sub(used + status_tail);
+    let status_w = if app.status.is_empty() || free < STATUS_FRAME + STATUS_MIN {
+        0
+    } else {
+        (STATUS_FRAME + app.status.width()).min(free)
+    };
+
     // The cursor's actions, packed until one would crowd `send` and the `?` off the line; the rest
     // spill to the `do` band.
     let mut overflow = Vec::new();
     let mut trimming = false;
     for a in do_acts {
         let ew = entry_width(app, a);
-        if trimming || used + ew + send_w + reserve > w {
+        if trimming || used + ew + send_w + status_w + reserve > w {
             trimming = true;
             overflow.push(a);
             continue;
@@ -1619,12 +1697,15 @@ fn footer_row1(app: &App, w: usize) -> (Vec<Span<'static>>, Vec<FooterAction>) {
         spans.extend(action_entry(app, a, Band::Send));
     }
 
-    // The transient status rides after the actions and fades without covering them; dropped when it
-    // would reach the `?`.
+    // The transient status rides after the actions, truncated into the room its reservation kept.
+    // It drops only below `STATUS_MIN`, where no message would be legible anyway. A modal that
+    // trimmed an action keeps room for its `…` too, since nothing else there says more keys exist.
     if !app.status.is_empty() {
-        let text = format!("  · {} ", app.status);
-        if used + text.chars().count() + reserve <= w {
-            used += text.chars().count();
+        let more = if overflow.is_empty() { reserve } else { reserve.max(MORE_ELLIPSIS) };
+        let room = w.saturating_sub(used + STATUS_FRAME + more);
+        if room >= STATUS_MIN {
+            let text = format!("  · {} ", truncate_width(&app.status, room));
+            used += text.width();
             spans.push(Span::styled(text, Style::default().fg(p.peach)));
         }
     }
@@ -1689,14 +1770,22 @@ fn render_band(
     lines
 }
 
+/// The comments list is a browse surface, not a menu: its box is a fraction of the body rather
+/// than its content's size, so the geometry holds still while comments come and go.
+const LIST_POPUP_W_PCT: u16 = 80;
+const LIST_POPUP_H_PCT: u16 = 70;
+
 fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     let p = app.palette();
-    let popup = centered(area, 80, 60);
+    let body = panes(area, app).body;
+    let w = body.width * LIST_POPUP_W_PCT / 100;
+    let h = body.height * LIST_POPUP_H_PCT / 100;
+    let popup = body_popup(area, app, w, h);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.mauve))
-        .title(format!("Comments ({})", app.store.len()));
+        .title(framed_title(&format!("Comments ({})", app.store.len())));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -1707,7 +1796,7 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, c)| {
             let loc = Span::styled(
-                c.location(),
+                format!(" {}", c.location()),
                 Style::default().fg(p.mauve).add_modifier(Modifier::BOLD),
             );
             let mut spans = vec![loc, Span::styled(format!("  {}", c.text), text_style(p))];
@@ -1717,10 +1806,144 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("  (stale)", Style::default().fg(p.red)));
             }
             // The list overlay is the active modal, so its row reads at full brightness.
-            selectable_row(spans, width, (i == app.list_cursor).then_some(p.surface2))
+            selectable_row(p, spans, width, (i == app.list_cursor).then_some(p.surface2))
         })
         .collect();
     frame.render_widget(List::new(items), inner);
+}
+
+/// A popup box of `w` × `h`, centered in the body band and clamped to it. Both popups place
+/// through here, so neither can ever reach the footer — the one surface advertising the keys
+/// the popup is listening for (`specs/tui.md`).
+fn body_popup(area: Rect, app: &App, w: u16, h: u16) -> Rect {
+    let body = panes(area, app).body;
+    let w = w.min(body.width);
+    let h = h.min(body.height);
+    Rect {
+        x: body.x + body.width.saturating_sub(w) / 2,
+        y: body.y + body.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// The picker is a menu, so its box is sized to its rows rather than to a fraction of the body.
+/// Three short rows in an 80%-tall box would be mostly empty (`specs/herdr-host.md`).
+const PICKER_MIN_WIDTH: usize = 34;
+
+fn picker_popup(area: Rect, app: &App) -> Rect {
+    let body = panes(area, app).body;
+    let name_width = picker_name_width(app);
+    // " N  " + the padded name + "  " + the dim trail, then the two borders. The highlight is
+    // a row fill, not a glyph, so it costs no width.
+    let widest = app
+        .picker_rows
+        .iter()
+        .map(|row| 4 + name_width + 2 + picker_trail(app, row).width())
+        .max()
+        .unwrap_or(0);
+    let title = framed_title(&picker_title(app)).width() + 2;
+    // Rows, the two borders, and one column of air after the longest trail — the air sits
+    // inside the row, so the selection fill still reaches both borders. Never narrower than
+    // the floor, so a picker of short names still reads as a deliberate dialog.
+    let w = (widest + 3).max(title).max(PICKER_MIN_WIDTH).min(body.width as usize) as u16;
+    let h = (app.picker_rows.len() + 2).min(body.height as usize) as u16;
+    body_popup(area, app, w, h)
+}
+
+/// The popup's row region, from the same `Block` shape the renderer draws, so the hit test
+/// and the painted rows can never disagree about where a row starts.
+fn picker_inner(popup: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(popup)
+}
+
+/// The names pad to the widest, so the dim tails start in one column.
+fn picker_name_width(app: &App) -> usize {
+    app.picker_rows.iter().map(|row| row.name.width()).max().unwrap_or(0)
+}
+
+/// A row's dim trail: the state, ` · <tab>` when herdr gave the tab a label, and ` · last used`
+/// on the row of the agent this session last sent to — the remembered default reads before an
+/// irreversible `enter` fires it (`specs/herdr-host.md`).
+fn picker_trail(app: &App, row: &AgentChoice) -> String {
+    let tab = if row.tab.is_empty() { String::new() } else { format!(" · {}", row.tab) };
+    let last =
+        if app.last_sent_pane.as_deref() == Some(&row.pane_id) { " · last used" } else { "" };
+    format!("{}{tab}{last}", row.state)
+}
+
+fn picker_title(app: &App) -> String {
+    let n = app.store.len();
+    let noun = if n == 1 { "comment" } else { "comments" };
+    format!("Send {n} {noun} to")
+}
+
+/// The first visible row, so the highlight stays on screen in a picker taller than the pane
+/// (`specs/input.md`).
+fn picker_scroll(app: &App, rows: usize) -> usize {
+    if rows == 0 || app.picker_cursor < rows {
+        return 0;
+    }
+    (app.picker_cursor + 1).saturating_sub(rows).min(app.picker_rows.len().saturating_sub(rows))
+}
+
+fn render_agent_picker(frame: &mut Frame, app: &App, area: Rect) {
+    let p = app.palette();
+    let popup = picker_popup(area, app);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.mauve))
+        .title(framed_title(&picker_title(app)));
+    let inner = picker_inner(popup);
+    frame.render_widget(block, popup);
+
+    let name_width = picker_name_width(app);
+    let first = picker_scroll(app, inner.height as usize);
+    let items: Vec<ListItem> = app
+        .picker_rows
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(inner.height as usize)
+        .map(|(i, row)| {
+            // Only the first nine rows carry a number, since no digit key reaches further.
+            let lead = if i < 9 { format!(" {}  ", i + 1) } else { "    ".to_string() };
+            let pad = name_width.saturating_sub(row.name.width());
+            let spans = vec![
+                Span::styled(lead, Style::default().fg(p.overlay0)),
+                // The name is the only part at full brightness: it is what the reviewer scans
+                // for, and the two weights are what keep this a picker rather than a table.
+                Span::styled(row.name.clone(), text_style(p)),
+                Span::styled(
+                    format!("{}  {}", " ".repeat(pad), picker_trail(app, row)),
+                    Style::default().fg(p.overlay0),
+                ),
+            ];
+            selectable_row(
+                p,
+                spans,
+                inner.width as usize,
+                (i == app.picker_cursor).then_some(p.surface2),
+            )
+        })
+        .collect();
+    frame.render_widget(List::new(items), inner);
+}
+
+/// The picker row under the pointer, for click-to-highlight (`specs/input.md`). `None`
+/// anywhere else, including the border and the title, so those clicks stay inert.
+pub fn hit_picker_row(area: Rect, app: &App, col: u16, row: u16) -> Option<usize> {
+    let inner = picker_inner(picker_popup(area, app));
+    if col < inner.x
+        || col >= inner.x + inner.width
+        || row < inner.y
+        || row >= inner.y + inner.height
+    {
+        return None;
+    }
+    let index = picker_scroll(app, inner.height as usize) + (row - inner.y) as usize;
+    (index < app.picker_rows.len()).then_some(index)
 }
 
 // --- Search screen (specs/search.md) -------------------------------------------------------
@@ -2189,7 +2412,7 @@ fn search_code_row(
         spans.push(Span::styled(prefix.to_string(), Style::default().fg(p.overlay0)));
     }
     spans.extend(emphasized_spans(shown, &shifted, p.match_hl, |_| text_style(p)));
-    selectable_row(spans, width, fill)
+    selectable_row(p, spans, width, fill)
 }
 
 /// Expand tabs to four spaces, shifting the match byte spans to keep them over the same
@@ -2319,6 +2542,7 @@ fn text_style(p: &Palette) -> Style {
 /// in the UI reads the same. The fill is applied per span (with a trailing pad) so it
 /// spans the full width under the `List` widget, matching the diff's `Paragraph` rows.
 fn selectable_row(
+    p: &Palette,
     mut spans: Vec<Span<'static>>,
     width: usize,
     fill: Option<Color>,
@@ -2333,6 +2557,12 @@ fn selectable_row(
             // match still reads on the selected row; the rest take the selection fill.
             if s.style.bg.is_none() {
                 s.style = s.style.bg(bg);
+            }
+            // Dim text lifts, so a selected row keeps its secondary parts: the file list's
+            // indent, the search hit's line number, the picker row's state and tab trail.
+            // The theme owns which color that is (`specs/theme.md`).
+            if let Some(fg) = s.style.fg {
+                s.style = s.style.fg(p.on_fill(fg));
             }
             s.style = s.style.add_modifier(Modifier::BOLD);
         }
@@ -2488,7 +2718,7 @@ fn render_pr_nav(frame: &mut Frame, app: &App, area: Rect) {
         .take(viewport)
         .map(|row| {
             let selected = row.cursor == Some(app.pr_cursor);
-            selectable_row(row.spans, width, selected.then(|| p.cursor_bg(true)))
+            selectable_row(p, row.spans, width, selected.then(|| p.cursor_bg(true)))
         })
         .collect();
     frame.render_widget(List::new(items), inner);
@@ -2864,7 +3094,13 @@ fn bordered(title: &str, focused: bool, p: &Palette) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(color))
-        .title(title.to_string())
+        .title(framed_title(title))
+}
+
+/// Every block title breathes: one space each side, so the text never touches the border
+/// run. One home for the affordance, so panes, the composer, and the popups agree.
+fn framed_title(title: &str) -> String {
+    if title.is_empty() { String::new() } else { format!(" {title} ") }
 }
 
 fn dim_paragraph<'a>(text: &'a str, p: &Palette) -> Paragraph<'a> {
@@ -2897,20 +3133,4 @@ fn inner_rect(outer: Rect) -> Rect {
         width: outer.width.saturating_sub(2),
         height: outer.height.saturating_sub(2),
     }
-}
-
-/// A `Rect` centered in `area` at `pct_x` × `pct_y` percent of its size.
-fn centered(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
-    let v = Layout::vertical([
-        Constraint::Percentage((100 - pct_y) / 2),
-        Constraint::Percentage(pct_y),
-        Constraint::Percentage((100 - pct_y) / 2),
-    ])
-    .split(area);
-    Layout::horizontal([
-        Constraint::Percentage((100 - pct_x) / 2),
-        Constraint::Percentage(pct_x),
-        Constraint::Percentage((100 - pct_x) / 2),
-    ])
-    .split(v[1])[1]
 }

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-18
-Last edited: 2026-07-20
+Last edited: 2026-07-31
 ---
 
 # Search
@@ -52,7 +52,7 @@ results.
 
 - `/` opens the search screen from any tab, from either pane. `esc` returns to the tab
   and place it left.
-- In the comment editor `/` is text. In the comments list it is inert.
+- In the comment editor `/` is text. In the comments list and the agent picker it is inert.
 - The header stays. The input band sits under it: the query with its caret, then the mode
   chips `files │ code`, the active one lit like the active header tab, the inactive one
   quiet. An empty query shows a dim placeholder. The footer carries the `tab` flip key, so
@@ -62,8 +62,8 @@ results.
 - A titled rule tops each pane: `results`, and `preview` with the file.
 - The results pane takes half the body by default. Dragging the divider changes the share,
   bounded by the minimum pane sizes (`tui.md`). The share is search's own session value —
-  the review layout's shares are untouched, and the position and resize keys are printable
-  here. A drag cancels by `input.md`'s divider rules.
+  the review layout's shares are untouched, and the position, hide, and resize keys are
+  printable here. A drag cancels by `input.md`'s divider rules.
 - At tiny sizes the input band keeps its one row and the panes divide the rest
   (`tui.md` minimum sizes).
 - The screen opens in `Files` mode. `tab` flips the mode, keeping the query, and paints

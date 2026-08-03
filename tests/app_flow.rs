@@ -4,12 +4,14 @@
 mod common;
 
 use std::cell::RefCell;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use common::{Repo, app_on, enter_tab, typed};
 use herdr_reviewr::app::{App, Band, Focus, FooterAction, Mode};
 use herdr_reviewr::config::NavigatorPosition;
 use herdr_reviewr::export::ExportTarget;
+use herdr_reviewr::herdr::{AgentChoice, AgentSample};
 use herdr_reviewr::keymap::{Action, Key, Keymap};
 use herdr_reviewr::model::{Scope, Side};
 use herdr_reviewr::turn::Status;
@@ -44,6 +46,9 @@ impl ExportTarget for FakeTarget {
     fn success_message(&self, count: usize) -> String {
         let noun = if count == 1 { "comment" } else { "comments" };
         format!("exported {count} {noun}")
+    }
+    fn failure_message(&self) -> String {
+        "fake not found".to_string()
     }
     fn export(&self, text: &str) -> Result<()> {
         self.captured.borrow_mut().push(text.to_string());
@@ -358,8 +363,9 @@ fn a_resting_pointer_keeps_the_arm_but_a_gesture_drops_it() {
     app.next_hunk();
     assert_eq!(app.armed_cross(), Some(true), "armed at a.rs's last hunk");
 
-    // Mouse capture reports every pointer move over the pane. A pointer resting on the sidebar
-    // is not an input the reviewer made, so it must not drop the crossing they armed.
+    // Mouse capture reports every pointer move over the pane. A pointer resting on the
+    // reviewr pane is not an input the reviewer made, so it must not drop the crossing
+    // they armed.
     mouse(&mut app, &keymap, MouseEventKind::Moved);
     assert_eq!(app.armed_cross(), Some(true), "pointer motion is not a gesture");
 
@@ -1510,6 +1516,145 @@ fn navigator_actions_cycle_remember_shares_and_respect_modes() {
 }
 
 #[test]
+fn navigator_hide_toggles_full_width_and_respects_modes() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 120, 40);
+    app.focus = Focus::Files;
+
+    // Hide: focus pins to the read pane, the layout keys go inert, no divider remains.
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden);
+    assert_eq!(app.focus, Focus::Diff, "hiding moves focus to the read pane");
+    press(&mut app, &keymap, KeyCode::Char('p'));
+    press(&mut app, &keymap, KeyCode::Char('<'));
+    assert_eq!(app.navigator_position, NavigatorPosition::Right, "`p` is inert while hidden");
+    assert_eq!(app.navigator_side_pct, 32, "`<` is inert while hidden");
+    let body = herdr_reviewr::ui::body_rect(area, &app);
+    let row = body.y + body.height / 2;
+    assert!(
+        (body.x..body.x + body.width)
+            .all(|col| !herdr_reviewr::ui::hit_divider(area, &app, col, row)),
+        "no divider exists while hidden"
+    );
+
+    // Show: the same key, kept position and share, focus staying on the read pane.
+    app.reveal_files = false;
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(!app.navigator_hidden);
+    assert_eq!(app.focus, Focus::Diff, "showing leaves focus on the read pane");
+    assert!(app.reveal_files, "showing re-reveals the cursor at the real viewport");
+
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    press(&mut app, &keymap, KeyCode::Tab);
+    assert!(!app.navigator_hidden, "`tab` shows the navigator");
+    assert_eq!(app.focus, Focus::Files, "and focuses it");
+
+    // The composer and the search input take `z` as text; the comments list keeps it inert.
+    app.focus = Focus::Diff;
+    app.diff_cursor = row_with(&app, '+');
+    app.start_comment();
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert_eq!(app.input, "z", "the hide key is text in the composer");
+    assert!(!app.navigator_hidden);
+    app.cancel_comment();
+
+    app.mode = Mode::List;
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(!app.navigator_hidden, "the action is inert in the comments list");
+    app.mode = Mode::Normal;
+
+    press(&mut app, &keymap, KeyCode::Char('/'));
+    assert_eq!(app.mode, Mode::Search);
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert_eq!(app.search.as_ref().unwrap().query, "z", "the hide key is text in search");
+    assert!(!app.navigator_hidden);
+    press(&mut app, &keymap, KeyCode::Esc);
+    press(&mut app, &keymap, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+
+    // `PR` is exempt: `z` inert there, and the state waits for the return to a file tab.
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden);
+    app.set_tab(herdr_reviewr::app::Tab::Pr).unwrap();
+    assert!(!app.navigator_hidden_here(), "`PR` always shows its navigator");
+    press(&mut app, &keymap, KeyCode::Char('z'));
+    assert!(app.navigator_hidden, "`z` is inert on `PR`");
+    press(&mut app, &keymap, KeyCode::Tab);
+    assert_eq!(app.focus, Focus::Files, "`PR` focuses its own navigator freely");
+    app.set_tab(herdr_reviewr::app::Tab::Changes).unwrap();
+    assert!(app.navigator_hidden_here(), "the hidden state survives the `PR` visit");
+    assert_eq!(app.focus, Focus::Diff, "and the return restores read-pane focus");
+}
+
+#[test]
+fn footer_swaps_the_hide_key_between_go_and_row_one() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Go)),
+        "visible: `z hide` waits under `?`"
+    );
+    assert!(!bands.contains(&(FooterAction::NavigatorHide, Band::Do)));
+
+    app.focus = Focus::Files;
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Do)),
+        "the files pane's calm row 1 carries `z hide`"
+    );
+    app.focus = Focus::Diff;
+
+    app.toggle_navigator_hidden();
+    let bands = app.footer_bands();
+    assert!(
+        bands.contains(&(FooterAction::NavigatorHide, Band::Do)),
+        "hidden: `z show` joins row 1"
+    );
+    assert!(
+        !bands.iter().any(|&(a, _)| a == FooterAction::NavigatorPosition),
+        "`p position` drops while hidden"
+    );
+
+    app.set_tab(herdr_reviewr::app::Tab::Pr).unwrap();
+    let bands = app.footer_bands();
+    assert!(
+        !bands.iter().any(|&(a, _)| a == FooterAction::NavigatorHide),
+        "`PR` never lists the hide key"
+    );
+    assert!(bands.contains(&(FooterAction::NavigatorPosition, Band::Go)), "`p` stays on `PR`");
+}
+
+#[test]
+fn hidden_footer_keeps_the_way_back_on_an_empty_changeset() {
+    let repo = Repo::init();
+    repo.write("a.rs", "fn a() {}\n");
+    repo.commit_all("c");
+    let mut app = app_on(&repo);
+    app.toggle_navigator_hidden();
+
+    let bands = app.footer_bands();
+    assert!(bands.contains(&(FooterAction::TogglePane, Band::Go)), "`tab files` stays offered");
+    assert!(bands.contains(&(FooterAction::NavigatorHide, Band::Do)), "`z show` joins row 1");
+}
+
+#[test]
+fn hidden_empty_read_pane_leads_with_show() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.toggle_navigator_hidden();
+    app.visible.clear();
+
+    let bands = app.footer_bands();
+    assert_eq!(bands[0], (FooterAction::NavigatorHide, Band::Primary), "`z show` leads row 1");
+    assert!(bands.contains(&(FooterAction::TogglePane, Band::Do)), "`tab files` sits beside it");
+}
+
+#[test]
 fn divider_drag_cancels_until_mouse_up() {
     let r = edited_repo();
     let mut app = app_on(&r);
@@ -2041,11 +2186,45 @@ fn jump_moves_the_cursor_onto_a_commented_line() {
 
 // --- last-turn scope -----------------------------------------------------------
 
-/// Drive one status sample on the worker-owned turn host and mirror its baseline into the
-/// app, exactly as a world completion landing would (specs/herdr-host.md).
-fn observe_turn(app: &mut App, host: &mut herdr_reviewr::world::TurnHost, status: Option<Status>) {
-    host.observe(status);
+/// One agent working in `cwd`, as `herdr agent list` would report it.
+fn agent_in(cwd: &Path, status: Status) -> AgentSample {
+    AgentSample { cwd: Some(cwd.to_string_lossy().into_owned()), status }
+}
+
+/// Drive one enumeration on the worker-owned turn host and mirror its baseline and
+/// membership into the app, exactly as a world completion landing would
+/// (specs/herdr-host.md). `None` is a failed enumeration.
+fn observe_agents(
+    app: &mut App,
+    host: &mut herdr_reviewr::world::TurnHost,
+    samples: Option<&[AgentSample]>,
+) {
+    let report = host.observe_agents(samples);
     app.sync_turn_baseline(host.baseline().map(str::to_string));
+    app.sync_agents_present(report.agents_present);
+}
+
+/// An app and the worker's turn host on one repo, built the way `run` builds them: one
+/// resolved top level handed to both (`src/lib.rs` `repo_root`). The two derive the baseline
+/// ref key independently, and membership compares resolved top levels, so a test that opened
+/// them on the raw temp path would key them apart — on macOS a temp dir resolves `/var` to
+/// `/private/var`, and no agent cwd would ever match.
+fn turn_setup(r: &Repo) -> (App, herdr_reviewr::world::TurnHost) {
+    let root = herdr_reviewr::git::toplevel(r.path()).expect("a repo");
+    (App::new(root.clone(), Scope::LastTurn, None), herdr_reviewr::world::TurnHost::open(root))
+}
+
+/// The single-agent case the older tests drive: one agent at the worktree root.
+fn observe_turn(
+    app: &mut App,
+    host: &mut herdr_reviewr::world::TurnHost,
+    repo: &Path,
+    status: Option<Status>,
+) {
+    match status {
+        Some(status) => observe_agents(app, host, Some(&[agent_in(repo, status)])),
+        None => observe_agents(app, host, None),
+    }
 }
 
 #[test]
@@ -2064,12 +2243,11 @@ fn last_turn_shows_a_change_producing_turn() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // turn start: candidate = "one"
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // turn start: candidate = "one"
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // first change promotes the baseline
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // first change promotes the baseline
     app.reload().unwrap();
     assert!(!app.awaiting_turn(), "the baseline is now set");
     assert!(app.entries.iter().any(|f| f.path == "a.rs"), "the turn's edit shows");
@@ -2080,17 +2258,16 @@ fn a_question_only_turn_keeps_the_previous_turns_diff() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
+    let (mut app, mut host) = turn_setup(&r);
     // Turn A edits a file.
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     // Turn B is a question — no file change.
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working));
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
     app.reload().unwrap();
     assert!(
         app.entries.iter().any(|f| f.path == "a.rs"),
@@ -2103,15 +2280,14 @@ fn a_permission_pause_stays_one_turn() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, Some(Status::Idle));
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // turn start: candidate = "one"
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // turn start: candidate = "one"
     r.write("a.rs", "one\nbefore\n"); // edit before the prompt
-    observe_turn(&mut app, &mut host, Some(Status::Blocked)); // permission prompt promotes baseline = "one"
-    observe_turn(&mut app, &mut host, Some(Status::Working)); // resume — must NOT re-baseline
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Blocked)); // permission prompt promotes baseline = "one"
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // resume — must NOT re-baseline
     r.write("a.rs", "one\nbefore\nafter\n"); // edit after the prompt
-    observe_turn(&mut app, &mut host, Some(Status::Working));
+    observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
     app.reload().unwrap();
     let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
     let annotation = a.annotation.as_ref().expect("a changed file is annotated");
@@ -2124,15 +2300,15 @@ fn the_baseline_survives_a_restart() {
     r.write("a.rs", "one\n");
     r.commit_all("init");
     {
-        let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-        let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-        observe_turn(&mut app, &mut host, Some(Status::Idle));
-        observe_turn(&mut app, &mut host, Some(Status::Working));
+        let (mut app, mut host) = turn_setup(&r);
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Idle));
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Working));
         r.write("a.rs", "one\ntwo\n");
-        observe_turn(&mut app, &mut host, Some(Status::Working)); // promotes and persists the ref
+        observe_turn(&mut app, &mut host, r.path(), Some(Status::Working)); // promotes and persists the ref
     }
-    // A fresh App — a sidebar restart — resumes the persisted baseline.
-    let mut restarted = App::new(r.path_buf(), Scope::LastTurn, None);
+    // A fresh App — a reviewr pane restart — resumes the persisted baseline. It reads the ref by
+    // the same key the host wrote it under, which is why both resolve the repo the one way.
+    let (mut restarted, _) = turn_setup(&r);
     restarted.reload().unwrap();
     assert!(!restarted.awaiting_turn(), "baseline resumed from the private ref");
     assert!(restarted.entries.iter().any(|f| f.path == "a.rs"), "the turn's edit still shows");
@@ -2143,13 +2319,211 @@ fn no_agent_status_pauses_tracking() {
     let r = Repo::init();
     r.write("a.rs", "one\n");
     r.commit_all("init");
-    let mut app = App::new(r.path_buf(), Scope::LastTurn, None);
-    let mut host = herdr_reviewr::world::TurnHost::open(r.path_buf());
-    observe_turn(&mut app, &mut host, None); // no herdr / no resolvable agent
+    let (mut app, mut host) = turn_setup(&r);
+    observe_turn(&mut app, &mut host, r.path(), None); // no herdr / no resolvable agent
     r.write("a.rs", "one\ntwo\n");
-    observe_turn(&mut app, &mut host, None);
+    observe_turn(&mut app, &mut host, r.path(), None);
     app.reload().unwrap();
     assert!(app.awaiting_turn(), "without a status signal the baseline never forms");
+}
+
+#[test]
+fn two_agents_in_one_worktree_produce_one_turn() {
+    // HH-TURN-PER-WORKTREE: the turn is the worktree's, so a second agent joining an open
+    // turn never starts another one or re-baselines the first agent's work out of the diff.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Idle)]));
+    // Agent A starts. Candidate = "one".
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Idle)]),
+    );
+    r.write("a.rs", "one\ntwo\n");
+    // Agent B joins mid-turn. A restart here would drop the "two" edit from the diff.
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Working)]),
+    );
+    r.write("a.rs", "one\ntwo\nthree\n");
+    observe_agents(
+        &mut app,
+        &mut host,
+        Some(&[agent_in(&root, Status::Working), agent_in(&root, Status::Working)]),
+    );
+
+    app.reload().unwrap();
+    let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
+    let annotation = a.annotation.as_ref().expect("a changed file is annotated");
+    assert_eq!(annotation.additions, 2, "both agents' edits belong to the one open turn");
+}
+
+#[test]
+fn a_turn_ends_only_once_every_agent_rests() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+    let both = |a, b| vec![agent_in(&root, a), agent_in(&root, b)];
+
+    observe_agents(&mut app, &mut host, Some(&both(Status::Idle, Status::Idle)));
+    observe_agents(&mut app, &mut host, Some(&both(Status::Working, Status::Working)));
+    let still_working = host.observe_agents(Some(&both(Status::Idle, Status::Working)));
+    assert!(!still_working.ended, "one agent still working keeps the turn open");
+    let rested = host.observe_agents(Some(&both(Status::Idle, Status::Done)));
+    assert!(rested.ended, "the turn ends once every agent rests");
+}
+
+#[test]
+fn a_prompt_answered_into_rest_still_ends_the_turn() {
+    // working → blocked → idle never puts a working sample next to the end, so reading the
+    // edge off the previous sample alone would strand the `PR` tab's per-turn refetch.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let root = r.path().to_path_buf();
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Idle)]));
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&root, Status::Working)]));
+    let held = host.observe_agents(Some(&[agent_in(&root, Status::Blocked)]));
+    assert!(!held.ended, "the permission prompt holds the turn open");
+    let rested = host.observe_agents(Some(&[agent_in(&root, Status::Idle)]));
+    assert!(rested.ended, "answering the prompt into idle ends the turn");
+}
+
+#[test]
+fn an_empty_worktree_rests_so_the_first_agent_starts_a_turn() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+
+    observe_agents(&mut app, &mut host, Some(&[]));
+    assert_eq!(app.turn_wait_message(), "no agent works here", "no agents means empty");
+    // The first agent to arrive and work starts a turn, since the empty worktree rested.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn", "the agent is a member");
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+
+    app.reload().unwrap();
+    assert!(!app.awaiting_turn(), "the arriving agent's turn formed a baseline");
+    assert!(app.entries.iter().any(|f| f.path == "a.rs"), "its edit shows");
+}
+
+#[test]
+fn an_agent_in_a_second_worktree_of_the_repository_is_not_a_member() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let elsewhere = tempfile::TempDir::new().expect("tempdir");
+    let sibling = elsewhere.path().join("wt");
+    r.git(&["worktree", "add", "-q", sibling.to_str().unwrap(), "-b", "other"]);
+
+    let (mut app, mut host) = turn_setup(&r);
+    // Rest first, so a wrongly-admitted sibling's rest→work edge would start a turn and
+    // fail the baseline assertion below rather than hiding behind the unobserved first sample.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Idle)]));
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Working)]));
+    assert_eq!(
+        app.turn_wait_message(),
+        "no agent works here",
+        "a second worktree resolves to its own top level"
+    );
+
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sibling, Status::Working)]));
+    app.reload().unwrap();
+    assert!(app.awaiting_turn(), "a non-member's work never forms this worktree's baseline");
+}
+
+#[test]
+fn an_agent_whose_cwd_is_not_an_absolute_path_is_not_a_member() {
+    // herdr's `cwd` is external input. `git -C ""` does no chdir at all and answers with
+    // reviewr's own directory — the reviewed repo — so a blank or relative spelling would
+    // otherwise admit an agent working somewhere else entirely.
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let nowhere = |cwd: &str| AgentSample { cwd: Some(cwd.to_string()), status: Status::Working };
+
+    observe_agents(&mut app, &mut host, Some(&[nowhere(""), nowhere("sub")]));
+    assert_eq!(app.agents_present(), Some(false), "neither spelling names a worktree");
+    r.write("a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[nowhere("")]));
+    app.reload().unwrap();
+    assert!(app.awaiting_turn(), "a non-member never forms this worktree's baseline");
+}
+
+#[test]
+fn an_agent_in_a_subdirectory_belongs_to_the_worktree() {
+    // The path is not the repo root, so this goes through the git resolution rather than the
+    // exact-match fast path.
+    let r = Repo::init();
+    r.write("sub/a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+    let sub = r.path().join("sub");
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Idle)]));
+    assert_eq!(
+        app.turn_wait_message(),
+        "waiting for the first turn",
+        "a subdirectory resolves to the same top level"
+    );
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Working)]));
+    r.write("sub/a.rs", "one\ntwo\n");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(&sub, Status::Working)]));
+
+    app.reload().unwrap();
+    assert!(!app.awaiting_turn(), "the subdirectory agent's turn counts");
+}
+
+#[test]
+fn a_failed_enumeration_keeps_the_previous_membership() {
+    let r = Repo::init();
+    r.write("a.rs", "one\n");
+    r.commit_all("init");
+    let (mut app, mut host) = turn_setup(&r);
+
+    // A hiccup before any poll has ever succeeded observed nothing, so it may not claim the
+    // worktree is empty — the reviewr pane has no idea yet (`specs/herdr-host.md`).
+    observe_agents(&mut app, &mut host, None);
+    assert_eq!(app.agents_present(), None, "a failed enumeration observes nothing");
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn", "so it waits");
+
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Idle)]));
+    assert_eq!(app.turn_wait_message(), "waiting for the first turn");
+    observe_agents(&mut app, &mut host, None); // herdr hiccup
+    assert_eq!(
+        app.turn_wait_message(),
+        "waiting for the first turn",
+        "a failed enumeration never flips the empty state"
+    );
+
+    // A hiccup mid-turn neither ends the turn nor re-baselines it on resume: the edit made
+    // while herdr was unreachable stays inside the one open turn.
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    r.write("a.rs", "one\ntwo\n");
+    let hiccup = host.observe_agents(None);
+    assert!(!hiccup.ended, "a failed enumeration never ends the turn");
+    assert_eq!(hiccup.agents_present, None, "a failed enumeration observes nothing");
+    observe_agents(&mut app, &mut host, Some(&[agent_in(r.path(), Status::Working)]));
+    app.reload().unwrap();
+    let a = app.entries.iter().find(|f| f.path == "a.rs").expect("a.rs changed");
+    assert_eq!(a.annotation.as_ref().unwrap().additions, 1, "the mid-hiccup edit is in the turn");
+
+    let emptied = host.observe_agents(Some(&[]));
+    assert_eq!(emptied.agents_present, Some(false), "a successful empty enumeration observes it");
 }
 
 /// The visible-row index of the file at `path`, or `None` when it is hidden/absent.
@@ -2876,7 +3250,7 @@ fn fixed_keys_survive_rebinding() {
     let mut app = app_on(&r);
     let keymap = Keymap::resolve(&[
         (Action::Down, vec![Key::plain('x')]),
-        (Action::Up, vec![Key::plain('z')]),
+        (Action::Up, vec![Key::plain('X')]),
     ])
     .unwrap();
     app.focus = Focus::Diff;
@@ -3134,7 +3508,11 @@ fn a_poll_keeping_the_open_file_leaves_find_open_and_re_derives() {
     let snapshot = herdr_reviewr::world::build(&app.world_input()).unwrap();
     app.reconcile_world(snapshot);
 
-    assert_eq!(app.mode, Mode::Find, "a same-file poll keeps the band open (specs O6)");
+    assert_eq!(
+        app.mode,
+        Mode::Find,
+        "a same-file poll keeps the band open (overview.md Continuity)"
+    );
     assert_eq!(app.find_count().unwrap().1, before + 1, "the count re-derives from new content");
 }
 
@@ -3651,7 +4029,7 @@ fn a_superseded_completion_syncs_the_baseline_but_paints_nothing() {
     r.write("d.rs", "d\n");
     let mut stale = completion_for(&app, 3);
     stale.input.turn_baseline = Some("cafe".into());
-    stale.turn = Some(herdr_reviewr::world::TurnReport { ended: true });
+    stale.turn = Some(herdr_reviewr::world::TurnReport { ended: true, agents_present: Some(true) });
     let before = app.entries.clone();
     assert!(
         !herdr_reviewr::land_world_completion(&mut app, stale, 4),
@@ -3659,6 +4037,11 @@ fn a_superseded_completion_syncs_the_baseline_but_paints_nothing() {
     );
     assert_eq!(app.entries, before, "a superseded snapshot never paints");
     assert!(app.pr_pending.is_some(), "the turn end still schedules the PR refetch");
+    assert_eq!(
+        app.agents_present(),
+        Some(true),
+        "membership syncs from a superseded completion too"
+    );
     assert_eq!(
         app.world_input().turn_baseline.as_deref(),
         Some("cafe"),
@@ -3701,6 +4084,19 @@ fn a_reveal_completion_settles_the_tab_and_rearms_the_cursor_reveal() {
     assert!(herdr_reviewr::land_world_completion(&mut app, landing, 2));
     assert!(app.reveal_files, "a switch-originated landing re-reveals the re-anchored cursor");
     assert!(app.entries.iter().any(|f| f.path == "c.rs"), "the landing caught up");
+}
+
+#[test]
+fn a_landing_world_result_never_flips_the_hidden_navigator() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.toggle_navigator_hidden();
+    r.write("c.rs", "c\n");
+    let mut landing = completion_for(&app, 2);
+    landing.reveal = true;
+    assert!(herdr_reviewr::land_world_completion(&mut app, landing, 2));
+    assert!(app.navigator_hidden, "the hidden state is place state; a landing reconciles only");
+    assert_eq!(app.focus, Focus::Diff, "the settle keeps focus on the lone read pane");
 }
 
 #[test]
@@ -3857,7 +4253,7 @@ mod search_overlay {
     }
 
     /// A world poll reconciles the preview but never reshapes the results or the pick —
-    /// only an edit re-queries (specs/search.md, overview.md Continuity O6).
+    /// only an edit re-queries (specs/search.md, overview.md Continuity).
     #[test]
     fn poll_never_reshapes_results_or_pick() {
         let repo = Repo::init();
@@ -4409,7 +4805,7 @@ mod search_overlay {
 
     /// The real engine, end to end: spawn the worker, run a query, and check the contract —
     /// results arrive, ignored files and `.git` never appear, and the worktree gains no
-    /// file (specs/overview.md O1).
+    /// file (specs/overview.md, the no-writes invariant).
     #[test]
     fn engine_worker_end_to_end() {
         let repo = Repo::init();
@@ -4472,4 +4868,283 @@ mod search_overlay {
             "the frecency store lives under the cache dir"
         );
     }
+}
+
+// --- Agent picker (specs/herdr-host.md, specs/input.md) ------------------------------------
+
+fn choice(pane: &str, name: &str) -> AgentChoice {
+    AgentChoice { pane_id: pane.into(), name: name.into(), state: "idle".into(), tab: "1".into() }
+}
+
+fn three_agents() -> Vec<AgentChoice> {
+    vec![choice("w8:p1", "claude"), choice("w8:p2", "release-bot"), choice("w8:p3", "codex")]
+}
+
+/// An app with two comments written and the picker open over three agents.
+fn app_with_picker(r: &Repo) -> App {
+    let mut app = app_on(r);
+    comment_on(&mut app, '+', "one");
+    comment_on(&mut app, '-', "two");
+    app.open_picker(three_agents());
+    app
+}
+
+#[test]
+fn the_highlight_arms_the_last_sent_agent_else_row_one() {
+    let r = edited_repo();
+    // Driven through `open_picker`, the verb the send actually calls, so the arming rule and
+    // its wiring are proven together (`specs/herdr-host.md`).
+    let armed = |last_sent: Option<&str>| {
+        let mut app = app_on(&r);
+        app.last_sent_pane = last_sent.map(str::to_string);
+        app.open_picker(three_agents());
+        app.picker_cursor
+    };
+    // The last-sent agent wins whenever it is still a candidate.
+    assert_eq!(armed(Some("w8:p3")), 2);
+    // Nothing sent this session, or a last-sent pane that has since closed: the first row.
+    assert_eq!(armed(None), 0);
+    assert_eq!(armed(Some("w8:pZ")), 0);
+}
+
+#[test]
+fn the_picker_moves_by_key_and_a_digit_past_the_last_row_is_inert() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+    assert_eq!(app.picker_cursor, 0);
+
+    // Through `handle_key`, so the picker's movement bindings are proven live, not just the verb.
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('j')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "`j` moves the highlight down");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('k')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 0, "`k` moves it back up");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Down), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "the arrows move it too");
+
+    app.picker_goto(2);
+    assert_eq!(app.picker_cursor, 2);
+    // A mistyped digit must not arm a neighbour the reviewer would then send to.
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('7')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 2, "a row past the end is inert, not clamped");
+}
+
+#[test]
+fn cancelling_the_picker_keeps_every_comment() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+    assert!(app.picker_rows.is_empty(), "the frozen rows are dropped with the picker");
+}
+
+// `last used` arming is proven end to end in tests/send_flow.rs, against a real send through a
+// fake herdr — the only layer where the pane that was addressed and the pane that arms can differ.
+
+#[test]
+fn a_picker_opened_from_the_comments_list_closes_back_onto_it() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "one");
+    comment_on(&mut app, '-', "two");
+    app.open_list();
+    app.open_picker(three_agents());
+    assert_eq!(app.mode, Mode::Picker);
+
+    let keymap = Keymap::default();
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, Mode::List, "cancelling restores the list the reviewer was browsing");
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+
+    // The same restoration covers the find band: a header Send click while finding must
+    // not cost the reviewer their band when they cancel the picker.
+    app.close_list();
+    app.open_find();
+    let over_find = app.mode.clone();
+    app.open_picker(three_agents());
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), Rect::new(0, 0, 80, 24), &keymap).unwrap();
+    assert_eq!(app.mode, over_find, "cancelling restores the find band");
+}
+
+#[test]
+fn the_picker_swallows_every_key_it_does_not_bind() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // `q` must not quit and `y` must not copy: both would destroy or consume the review while
+    // the picker is up, and both are live in the comments list (specs/input.md).
+    for code in [KeyCode::Char('q'), KeyCode::Char('y'), KeyCode::Char('r'), KeyCode::Char('s')] {
+        let mut app = app_with_picker(&r);
+        let rows_before = app.picker_rows.clone();
+        let status_before = app.status.clone();
+        handle_key(&mut app, KeyEvent::from(code), area, &keymap).unwrap();
+        assert!(!app.should_quit, "{code:?} quit the app from the picker");
+        assert_eq!(app.mode, Mode::Picker, "{code:?} left the picker");
+        assert_eq!(app.store.len(), 2, "{code:?} consumed comments from the picker");
+        // `y` reaching the clipboard and `s` re-entering the send both change these even where
+        // the action itself fails, so they catch the leak on a machine with no clipboard tool.
+        assert_eq!(app.picker_rows, rows_before, "{code:?} rebuilt the frozen rows");
+        assert_eq!(app.status, status_before, "{code:?} acted and reported from the picker");
+    }
+}
+
+#[test]
+fn a_chord_never_fires_the_pickers_irreversible_send() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // `alt+enter` and `shift+enter` insert a newline in the comment editor the reviewer left
+    // moments ago (specs/input.md). Carried into the picker, that muscle memory must not send
+    // the whole review to the armed agent — only the bare key fires an irreversible action.
+    for modifiers in [KeyModifiers::ALT, KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+        let mut app = app_with_picker(&r);
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, modifiers), area, &keymap).unwrap();
+        assert_eq!(app.mode, Mode::Picker, "{modifiers:?}+enter left the picker");
+        assert_eq!(app.store.len(), 2, "{modifiers:?}+enter consumed the review");
+
+        // A chorded digit must not move the highlight either: the row it would arm is the row
+        // the next bare `enter` sends to.
+        let mut app = app_with_picker(&r);
+        handle_key(&mut app, KeyEvent::new(KeyCode::Char('3'), modifiers), area, &keymap).unwrap();
+        assert_eq!(app.picker_cursor, 0, "{modifiers:?}+3 armed a row");
+    }
+
+    // `esc` stays permissive: cancelling is always safe, and no stray modifier may trap the
+    // reviewer in a modal that swallows every other key.
+    let mut app = app_with_picker(&r);
+    handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::SHIFT), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "a modified `esc` still cancels");
+    assert_eq!(app.store.len(), 2, "cancelling consumes nothing");
+}
+
+#[test]
+fn the_picker_owns_its_keys_on_every_tab() {
+    use herdr_reviewr::app::Tab;
+
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // The picker is checked before the tab handlers, so no tab can eat a modal's keys. On the
+    // read-only PR tab, `q` quits and the digits switch tabs — both would act behind an open
+    // picker if the modal were checked second (specs/input.md).
+    let mut app = app_with_picker(&r);
+    app.tab = Tab::Pr;
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('q')), area, &keymap).unwrap();
+    assert!(!app.should_quit, "`q` quit the app from a picker on the PR tab");
+    assert_eq!(app.mode, Mode::Picker, "`q` left the picker");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('1')), area, &keymap).unwrap();
+    assert_eq!(app.tab, Tab::Pr, "`1` switched tabs behind the picker");
+    assert_eq!(app.picker_cursor, 0, "`1` moved the highlight, as the picker's own key");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "`esc` still cancels from the PR tab");
+}
+
+#[test]
+fn a_second_open_never_stacks_a_picker_that_one_esc_cannot_leave() {
+    let r = edited_repo();
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+
+    // A second open must not capture `Picker` as the mode to restore, or `esc` would land back
+    // in a picker whose rows are gone — a modal that swallows every key and whose `enter` does
+    // nothing. The frozen row set also outranks a later one (specs/herdr-host.md).
+    let mut app = app_with_picker(&r);
+    app.picker_goto(2);
+    app.open_picker(vec![choice("w8:p9", "other")]);
+    assert_eq!(app.picker_rows, three_agents(), "the second open replaced the frozen rows");
+    assert_eq!(app.picker_cursor, 2, "the second open moved the highlight");
+    handle_key(&mut app, KeyEvent::from(KeyCode::Esc), area, &keymap).unwrap();
+    assert_eq!(app.mode, Mode::Normal, "one `esc` leaves the picker");
+
+    // A picker over no rows has nothing to choose and no `enter` that acts, so it never opens.
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "one");
+    app.open_picker(Vec::new());
+    assert_eq!(app.mode, Mode::Normal, "an empty row set opens no modal");
+}
+
+#[test]
+fn the_picker_digits_are_literal_whatever_the_tab_keys_are_bound_to() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 80, 24);
+    let tab_before = app.tab;
+
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('2')), area, &keymap).unwrap();
+    assert_eq!(app.picker_cursor, 1, "`2` moved the highlight to row 2");
+    assert_eq!(app.tab, tab_before, "`2` did not switch tabs from inside the picker");
+}
+
+#[test]
+fn a_refresh_behind_the_picker_moves_neither_the_rows_nor_the_place() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+    app.picker_goto(2);
+    let rows_before = app.picker_rows.clone();
+    let file_before = app.diff_path.clone();
+    let cursor_before = app.diff_cursor;
+    let frozen_diff = app.diff.clone();
+
+    // The open file shifts underneath the picker, and a second file appears. Rewriting `a.rs`
+    // is what makes this test detect the freeze: a new file alone never rebuilds the open diff.
+    r.write("a.rs", "alpha\nBETA\ngamma\ndelta\nepsilon\nzeta\n");
+    r.write("b.rs", "new\n");
+    app.reload().unwrap();
+
+    assert_eq!(app.picker_rows, rows_before, "the frozen rows never reorder or change");
+    assert_eq!(app.picker_cursor, 2, "the highlight stays where the reviewer put it");
+    assert_eq!(app.diff_path, file_before, "the place behind the picker is frozen");
+    assert_eq!(app.diff_cursor, cursor_before);
+    assert_eq!(app.diff, frozen_diff, "the open diff is frozen while the picker is up");
+    assert!(app.entries.iter().any(|f| f.path == "b.rs"), "the file list still refreshes");
+}
+
+#[test]
+fn a_config_error_closes_the_picker_and_keeps_the_comments() {
+    let r = edited_repo();
+    let mut app = app_with_picker(&r);
+
+    app.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_eq!(app.mode, Mode::Normal, "the picker's rows would be stale after recovery");
+    assert!(app.picker_rows.is_empty());
+    assert_eq!(app.store.len(), 2, "saved comments always survive a config error");
+
+    // A picker opened over the find band unwinds through that band's own closer, so recovery
+    // never meets a restored mode whose state has already been dropped.
+    let mut over_find = app_on(&r);
+    comment_on(&mut over_find, '+', "one");
+    over_find.open_find();
+    over_find.open_picker(three_agents());
+    over_find.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_eq!(over_find.mode, Mode::Normal, "the find band closes with the picker it held");
+
+    // A picker opened over the comments list leaves the list behind, which recovery carries with
+    // the comments, so the reviewer lands where they were rather than in `Normal`.
+    let mut over_list = app_on(&r);
+    comment_on(&mut over_list, '+', "one");
+    over_list.open_list();
+    over_list.open_picker(three_agents());
+    over_list.set_config_error("theme = \"not-a-theme\"".to_string());
+    assert_eq!(over_list.mode, Mode::List, "the list outlives the picker it held");
+    assert!(over_list.picker_rows.is_empty(), "the frozen rows would be stale after recovery");
+    assert_eq!(over_list.store.len(), 1, "saved comments always survive a config error");
+}
+
+#[test]
+fn the_picker_owns_the_whole_footer_bar() {
+    let r = edited_repo();
+    let app = app_with_picker(&r);
+    let bands: Vec<FooterAction> = app.footer_bands().into_iter().map(|(a, _)| a).collect();
+    assert_eq!(
+        bands,
+        vec![FooterAction::PickAgent, FooterAction::ClosePicker, FooterAction::MovePickerRow]
+    );
 }

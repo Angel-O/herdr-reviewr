@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-07-21
+Last edited: 2026-07-31
 ---
 
 # Input
@@ -19,6 +19,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 - The arrows, `tab`, `esc`, `enter`, and the page keys are structural. They are fixed and never rebind.
 - A key hint in the header or the footer shows its action's first bound key.
 - The comments list acts through the same bindings and closes on `esc` and the `comments` binding.
+- The agent picker acts through the `down` / `up` bindings and closes on `esc`.
 - Prose and mockups elsewhere show the default keys.
 
 | action                                                   | does                                        | keys                                        | mouse                         |
@@ -38,6 +39,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 | `wrap`                                                   | toggle line wrap                            | `w`                                         | —                             |
 | `preview`                                                | toggle the markdown preview                 | `m`                                         | —                             |
 | `navigator-position`                                     | move the navigator clockwise                | `p`                                         | —                             |
+| `navigator-hide`                                         | hide / show the navigator                   | `z`                                         | —                             |
 | `navigator-grow` / `navigator-shrink`                    | grow / shrink the navigator                 | `<` / `>`                                   | drag the divider              |
 | `select`                                                 | select a line range, removed lines included | `v` then move                               | click-drag in the diff        |
 | —                                                        | clear the selection                         | `esc`                                       | —                             |
@@ -59,11 +61,13 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 
 `navigator-grow` and `navigator-shrink` change the active share by four percentage points. The allowed range clamps every change.
 
-These three navigator actions work from either main pane on every tab. While the comment editor is open, their printable characters are text. In the comments list they are inert. Those local modes omit the navigator actions from the footer.
+`navigator-hide` hides the navigator and shows it again in place (`tui.md`). On the file tabs it is never inert in `Normal` mode, so the way back is always the key that hid it. On `PR` it is inert and stays out of the footer (`tui.md`). While the navigator is hidden, `navigator-position`, `navigator-grow`, and `navigator-shrink` are inert. In `Normal` mode, `tab` then shows the navigator and focuses it. Every other mode keeps its own `tab` meaning (`search.md`).
 
-A divider drag belongs to the navigator position and split axis at mouse-down. A keypress, terminal resize, or config-driven layout change cancels it. After cancellation, drag events are consumed until mouse-up rather than becoming a selection in the read pane.
+Outside the hidden-state rules above, these four navigator actions work from either main pane on every tab. While the comment editor is open, their printable characters are text. In the comments list and the agent picker they are inert. Those local modes omit the navigator actions from the footer.
 
-Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send reports that the comments were added to the agent input; a successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
+A divider drag belongs to the navigator position and split axis at mouse-down. A keypress, terminal resize, or config-driven layout change cancels it. A cancelled drag keeps its last painted share, and the cancelling keypress still performs its own action. After cancellation, drag events are consumed until mouse-up rather than becoming a selection in the read pane.
+
+Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
 
 ## Behavior
 
@@ -90,7 +94,7 @@ The steps and the skips share the rest:
 - Adjacency is the list's visible order, so a collapsed subtree is skipped.
 - Opening a file this way moves the list selection onto it.
 - With no target in the pressed direction, a press does nothing.
-- Both are inert while a line selection is live and while the comments list is open.
+- Both are inert while a line selection is live and while the comments list or the agent picker is open.
 - The `PR` tab has neither.
 
 ### Footer
@@ -104,14 +108,14 @@ until `?` or `esc`. It never lists a key that would not work in the current stat
 ```
 
 Opening it turns the one-row action bar into a labeled grid. Row 1 becomes the `do` band under a
-dim `do` label: the primary and the cursor's actions. Two bands follow it, `go` (the always-there
-keys) and `move` (cursor movement). Every band's content aligns in one column. The `?` stays at the
+dim `do` label: the primary and the cursor's actions. Two bands follow it, `go` (the global
+actions) and `move` (cursor movement). Every band's content aligns in one column. The `?` stays at the
 right of the `do` row.
 
 ```
  do    e edit · d delete · n/N jump · s send 2                                ?
  go    u/b/t scope · / search · ctrl+f find · w wrap · l list · y copy · r refresh · 1·2·3 tabs
-       tab files · p position · q quit
+       tab files · p position · z hide · q quit
  move  j k · ] [ hunk · f F file · PageUp PageDown
 ```
 
@@ -125,21 +129,25 @@ Row 1 is always shown:
 | ------- | --------------------------------------------------------------------------------- |
 | primary | the most likely next step, in a bright accent, never dropped                      |
 | send    | `s send N`, present once any comment is written, after the primary, never dropped |
+| status  | the transient message, after `send`, truncated to fit                             |
 | actions | the cursor's other actions, in normal text, trimmed to fit                        |
 | more    | a `?` at the right, muted but legible — always present, and expands the rest      |
 
-A narrow row drops trailing actions to fit. The primary, `send`, and the `?` never drop. On a pane
-too narrow even for those, the primary truncates before the `?` does.
+A narrow row drops trailing actions to fit. The status outranks them, since the `?` panel repeats
+every action and nothing repeats the status. A 40-column reviewr pane shows `no agent here …` rather than
+nothing. The status drops only below a legible width. The primary, `send`, and the `?` never drop. On
+a pane too narrow even for those, the primary truncates before the `?` does.
 
 The `?` expansion:
 
 - It lists every shortcut applicable in the current context that is not already on row 1, wrapped
   below row 1 in three labeled bands, each a dim label then its keys. `do`: the cursor's actions.
-  `go`: the keys that work anywhere — scope, search, find, wrap, the comments list, copy, refresh, the
-  tabs, the pane toggle, the navigator-position key, quit. `move`: down and up, the hunk and file
-  steps, the page keys. An empty band is dropped, and a key that would not work in the current state
-  never appears. The hunk step shows only where it works, the `Changes` diff and never a preview
-  (see Changeset traversal). `PR` has no hunk or file steps.
+  `go`: the global actions, each shown only where it works — scope, search, find, wrap, the comments
+  list, copy, refresh, the tabs, the pane toggle, the navigator position and hide keys, quit. `move`:
+  down and up, the hunk and file steps, the page keys. An empty band is dropped, and a key that would
+  not work in the current state never appears. The hunk step shows only where it works, the `Changes`
+  diff and never a preview (see Changeset traversal). `PR` has no hunk or file steps. The hide key's
+  hint reads `hide` while the navigator shows and `show` while hidden.
 - Row 1 wears the `do` label and aligns into the grid only while the panel is open. Collapsed, it is
   the flush action bar with no label. The `?` sits at its right in both states.
 - It takes body rows down to the read pane's minimum (`tui.md`). A context that needs more rows than
@@ -158,19 +166,22 @@ Row 1's primary and actions follow the cursor:
 | a diff line                              | `c comment`                    | `v select`                        |
 | a line of a markdown file that previews  | `c comment`                    | `v select · m preview`            |
 | a live selection                         | `c comment`                    | `esc clear`                       |
-| a commented line                         | `e edit`                       | `d delete · n/N jump`   |
-| a fold                                   | `→ expand fold`                | —                       |
-| an open markdown preview                 | `m source`                     | —                       |
-| a file (file list)                       | `tab diff`                     | —                       |
-| a collapsed directory                    | `→ expand`                     | —                       |
-| an expanded directory                    | `← collapse`                   | —                       |
-| nothing to review (awaiting turn)        | `u/b/t scope`                  | `r refresh`             |
+| a commented line                         | `e edit`                       | `d delete · n/N jump`             |
+| a fold                                   | `→ expand fold`                | —                                 |
+| an open markdown preview                 | `m source`                     | —                                 |
+| a file (file list)                       | `tab diff`                     | `z hide`                          |
+| a collapsed directory                    | `→ expand`                     | `z hide`                          |
+| an expanded directory                    | `← collapse`                   | `z hide`                          |
+| nothing to review (awaiting turn)        | `u/b/t scope`                  | `r refresh`                       |
+| an empty read pane, navigator hidden     | `z show`                       | `tab files`                       |
 
 - An armed crossing outranks the cursor's own action and leads row 1, since only the footer says the next press leaves the file. It is the one movement key on row 1 (see Changeset traversal). While it is armed, the `move` band drops the hunk step, whose key row 1 now shows.
+- While the navigator is hidden, `z show` joins row 1's actions, so the collapsed footer always names the way back. Visible, `z hide` joins them only while the file list holds focus, whose row 1 has the room. Elsewhere it waits in the `go` band.
+- When the awaiting-turn state and the hidden empty read pane match at once, the awaiting-turn row wins, and `z show` still joins its actions.
 - `scope`, `search`, and `find` are global, not cursor actions, so the `go` band carries them, never row 1 — `search` in every context, `find` wherever the read pane has content (`search.md`, `find-in-file.md`). `scope` leads row 1 only where nothing else does, an empty or notice diff.
 - Movement keys never sit on row 1. The `move` band shows them.
-- The comment editor, the comments list, the search screen, and the find band show their own one-row footer, without `?`. The expansion's open state is kept and restored when they close.
-- `?` (the `keys` action) toggles the expansion in `Normal` mode only. It is text in the comment editor and the search and find inputs, and inert in the comments list.
+- The comment editor, the comments list, the agent picker, the search screen, and the find band show their own one-row footer, without `?`. The expansion's open state is kept and restored when they close.
+- `?` (the `keys` action) toggles the expansion in `Normal` mode only. It is text in the comment editor and the search and find inputs, and inert in the comments list and the agent picker.
 - The changed-file count and line totals live in the header. The footer carries only the comment count, inside `s send N`.
 - On `PR` row 1 carries the PR state line and `o open ↗` per `pr-tab.md`, and `?` expands to the rest.
 
@@ -202,6 +213,25 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - Movement, insertion, and deletion are character-wise. Multi-byte and wide characters count as whole characters.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
+
+### Agent picker
+
+`Send` opens the picker (`herdr-host.md`). Every key below acts, and every other key is inert.
+
+| key                     | does                                        |
+| ----------------------- | ------------------------------------------- |
+| `j` / `k` / `↓` / `↑`   | move the highlight                          |
+| `1` – `9`               | move the highlight to that row              |
+| `enter`                 | send every comment to the highlighted agent |
+| `esc`                   | cancel, keeping every comment               |
+
+Only the unmodified `enter` sends. `Alt+Enter` and `Shift+Enter` insert a newline in the comment editor, so carrying that chord into the picker sends nothing rather than handing the whole review to the armed agent.
+
+- A click moves the highlight to the clicked row. A click on the highlighted row sends. The highlight is armed when the picker opens, so a first click on the armed row sends immediately. Every other gesture is inert, and none reaches the view behind.
+- The digits are literal here, whatever `tab-changes` and its siblings are bound to. A modified digit moves nothing.
+- `esc` cancels with or without a modifier, so no keystroke traps the reviewer in the picker.
+- A picker taller than the pane scrolls with the highlight.
+- `esc` returns to the view the send was issued from, the comments list and the find band included.
 
 ## Non-goals
 

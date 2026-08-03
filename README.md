@@ -8,7 +8,7 @@
   <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="#controls">controls</a> · <a href="#diff-scopes">scopes</a> · <a href="#configuration">configuration</a> · <a href="#limitations">limitations</a> · <a href="CHANGELOG.md">changelog</a>
 </p>
 
-A code-review sidebar for [herdr](https://herdr.dev). Your agent writes the code. You read its
+A code-review pane for [herdr](https://herdr.dev). Your agent writes the code. You read its
 diff in a pane beside the chat, comment on the lines, and send the notes back. You never leave
 the terminal.
 
@@ -17,7 +17,7 @@ the terminal.
 One persistent pane, pointed at a git worktree:
 
 - **Diff review** — the agent's changed files, syntax-highlighted.
-- **Last-turn diff** — what the agent's latest turn changed, on its own.
+- **Last-turn diff** — what the worktree's latest turn changed, on its own.
 - **Line comments** — select a range, write a note. One keystroke sends every note to the agent.
 - **File viewer** — any file's current content from the whole worktree.
 - **Search** — fuzzy file names and live code grep across the worktree, powered by [fff](https://github.com/dmtrKovalenko/fff).
@@ -32,7 +32,7 @@ never posts.
 
 ## Requirements
 
-- **herdr ≥ 0.7.0** (the plugin system).
+- **herdr ≥ 0.7.5** (the plugin system).
 - **git** on `PATH`.
 - A **truecolor** terminal with Unicode box-drawing.
 - **macOS or Linux.**
@@ -74,7 +74,7 @@ Everything works except **Send** and the **last turn** scope. Those need herdr a
 
 ## Quick start
 
-Open the sidebar next to your agent:
+Open reviewr next to your agent:
 
 1. **Pick a file.** Changed files are in the navigator. `j` / `k` moves, the diff follows. Or
    `]` walks the changes hunk by hunk, file after file.
@@ -107,43 +107,44 @@ The keys below are defaults. You can rebind every action, even to several keys a
 | --- | --- |
 | `1` `2` `3` | Switch tab — Changes / All files / PR |
 | `u` `b` `t` | Switch scope — uncommitted / branch / last turn |
-| `j` `k` · `↑` `↓` | Move the cursor in the focused pane |
-| `]` `[` | Jump to the next / previous hunk — press again at a file's edge to cross into the adjacent file |
-| `f` `F` | Jump to the next / previous file |
+| `j` `k` · `↑` `↓` | Move cursor |
+| `]` `[` | Jump to next / previous hunk |
+| `f` `F` | Jump to next / previous file |
 | `PageUp` `PageDown` | Move a page |
 | `Ctrl+U` `Ctrl+D` | Move a half-page |
-| `Tab` | Switch focus between the navigator and read pane |
-| `→` `←` | Expand or collapse a directory or fold, or scroll the diff sideways |
-| `/` | Search files and code from any tab — type to filter, then pick a result with `↑` `↓` and open it with `enter` |
-| `Ctrl+F` | Find in the open file — every match lights up, `enter` and the arrows step between them |
+| `Tab` | Switch focus |
+| `→` `←` | Expand / collapse, or scroll sideways |
+| `/` | Search files and code |
+| `Ctrl+F` | Find in file |
 | `w` | Toggle line wrap |
-| `m` | Toggle the markdown preview of a `.md` file (Changes or All files) |
-| `p` | Move the navigator clockwise: right / bottom / left / top |
-| `<` `>` | Grow / shrink the navigator |
-| `r` | Refresh now |
-| `?` | Show every shortcut that works in the current context |
+| `m` | Preview markdown file |
+| `p` | Rotate navigator |
+| `z` | Hide / show navigator |
+| `<` `>` | Grow / shrink navigator |
+| `r` | Refresh |
+| `?` | Open shortcuts helper |
 | `q` | Quit |
 
 **Reviewing** (in the diff)
 
 | Key | Action |
 | --- | --- |
-| `v` | Start a line selection, then `j` / `k` to extend (or click-drag) |
-| `c` | Comment on the selection — or on the current line |
-| `e` `d` | Edit / delete the comment under the cursor |
-| `n` `N` | Jump to the next / previous comment |
-| `l` | List every comment |
-| `s` | Send all comments to the agent |
-| `y` | Copy all comments to the clipboard |
-| `esc` | Clear the selection |
+| `v` | Select lines |
+| `c` | Comment on line or selection |
+| `e` `d` | Edit / delete comment |
+| `n` `N` | Jump to next / previous comment |
+| `l` | List all comments |
+| `s` | Send comments to agent |
+| `y` | Copy comments to clipboard |
+| `esc` | Clear selection |
 
 **In the comment box**
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Save the comment |
+| `Enter` | Save comment |
 | `Esc` | Cancel |
-| `Shift+Enter` · `Alt+Enter` · `Ctrl+J` | Insert a newline |
+| `Shift+Enter` · `Alt+Enter` · `Ctrl+J` | Insert newline |
 
 Plus the usual caret moves: arrows, `Home` / `End`, `Ctrl+A` / `Ctrl+E`, `Alt+b` / `Alt+f` word
 jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
@@ -152,9 +153,9 @@ jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
 
 | Key | Action |
 | --- | --- |
-| `j` `k` | Move through the description and comments |
-| `PageUp` `PageDown` | Scroll the focused pane |
-| `o` | Open the PR in your browser |
+| `j` `k` | Move through description and comments |
+| `PageUp` `PageDown` | Scroll focused pane |
+| `o` | Open PR in browser |
 | `r` | Refresh |
 
 The mouse works too: click files and tabs, drag to select, scroll. A link in PR Markdown or a
@@ -178,10 +179,10 @@ heading. External file-preview renderers do not expose links.
 - **branch** — the working tree vs the merge-base with the base branch: **uncommitted** plus
   the branch's commits. Default base `origin/main`, then `origin/master`, `main`, `master`
   ([Base branch](#base-branch)).
-- **last turn** — only what the agent changed since its most recent turn started
+- **last turn** — everything that changed in this worktree since its most recent turn started
   ([Limitations](#limitations)).
 
-The sidebar starts in **uncommitted**. `default_scope` changes that. Switching with `u`/`b`/`t`
+reviewr starts in **uncommitted**. `default_scope` changes that. Switching with `u`/`b`/`t`
 wins for the rest of the session.
 
 Every scope respects `.gitignore`, so build output never clutters **Changes**. To review a file,
@@ -227,7 +228,7 @@ select  = ["v", "ㅍ"]
 ```
 
 A missing file or omitted key uses its default. Any unknown key, wrong type, or invalid value
-makes the whole file invalid. reviewr never applies the valid-looking parts. The sidebar shows
+makes the whole file invalid. reviewr never applies the valid-looking parts. The pane shows
 the config error until you fix the file, then recovers on its next refresh. Replace the file
 atomically if your editor might expose a partial save.
 
@@ -285,7 +286,8 @@ navigator_position = "bottom"
 ```
 
 Side layouts start at 32% of the width (15–60%), stacked at 25% of the height (15–50%), each
-remembered separately for the session. `<` grows, `>` shrinks, or drag the divider.
+remembered separately for the session. `<` grows, `>` shrinks, or drag the divider. `z` hides
+the navigator altogether and brings it back.
 
 ### Base branch
 
@@ -327,6 +329,7 @@ The action names and their defaults:
 | `wrap` | `w` |
 | `preview` | `m` |
 | `navigator-position` | `p` |
+| `navigator-hide` | `z` |
 | `navigator-grow` / `navigator-shrink` | `<` / `>` |
 | `select` | `v` |
 | `comment` | `c` |
@@ -372,7 +375,7 @@ aliases like `github.com-work`. Use a canonical-host remote or an `insteadOf` re
 Authenticate with `gh auth login --hostname github.example.com`,
 `glab auth login --hostname git.corp.example`, or `az login`.
 
-### Sidebar placement
+### Pane placement
 
 The toggle opens reviewr as a split to the right of your agent. `toggle_placement` changes the
 shape:
@@ -404,19 +407,31 @@ Set this when another plugin arranges your new worktrees, like
 the same worktree event and race. With auto-open off, the layout builds undisturbed and your
 toggle opens reviewr on top.
 
-A layout can also open reviewr itself, once its panes are in place:
+A layout places reviewr like any other program. Give one pane the command:
+
+```toml
+command = "herdr-reviewr"
+```
+
+That pane is a full reviewr pane. It reads your config, sends to agents, tracks turns, and the
+toggle closes it. The install links the binary at `~/.local/bin/herdr-reviewr` when that
+directory exists, and always at
+`~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path if
+`~/.local/bin` is not on your `PATH`. The install creates both links, and every toggle, open,
+or close re-points them at the live plugin — linked dev checkouts included.
+
+A layout hook can also invoke the actions, once its panes are in place:
 
 ```bash
 herdr plugin action invoke open --plugin persiyanov.reviewr
 ```
 
-`open` ignores `auto_open`. An explicit call is you asking. It does nothing when a sidebar is
-already open, so a layout can run it on every pass. `close` does nothing when none is open.
-Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`.
-
-The action targets the focused workspace, so invoke it while the new workspace has focus.
-It also opens reviewr as its own new pane, so run the invoke as a one-shot from your layout
-hook. A pane whose command is the invoke exits when the invoke returns.
+`open` ignores `auto_open`. An explicit call is you asking. It does nothing when a reviewr pane
+is already open, so a layout can run it on every pass. `close` does nothing when none is open.
+Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`. The action targets the
+focused workspace, so invoke it while the new workspace has focus. Put `herdr-reviewr` itself in
+a layout pane, never the invoke. A pane whose command is the invoke exits when the invoke
+returns.
 
 ## Limitations
 
@@ -436,11 +451,12 @@ The known constraints:
   says so, and **Send** still works.
 
 **herdr coupling**
-- **Send needs a findable agent pane** — the agent in your tab, or the sole agent in the
-  workspace. Otherwise Send does nothing and keeps your comments.
+- **Send needs an agent in the workspace** — one agent takes the comments straight away, and
+  several open a picker so you choose. With no agent, Send says so and keeps your comments.
 - **last turn relies on polling** (2 s default) — a turn that starts and finishes inside one
-  poll is missed, and the scope shows everything since the last *observed* turn start. It never
-  shows lines the agent didn't write, and it can span more than one turn.
+  poll is missed, and the scope shows everything since the last *observed* turn start. It can
+  span more than one turn. A turn belongs to the worktree, so with several agents in one
+  worktree the diff carries all of their work, and your own edits sit in it alongside theirs.
 
 **PR tab (GitHub, GitLab, and Azure DevOps)**
 - **Read-only** — needs the forge's authenticated CLI (`gh`, `glab`, or `az`) and a
@@ -460,8 +476,9 @@ The known constraints:
   per-comment send, no duplicate delivery, and a failure leaves everything in place.
 - **No line-number rebasing** — a comment stays locatable by its diff snippet, not its line
   number. reviewr flags a stale comment instead of dropping it.
-- **One sidebar per worktree** — two on the same worktree race the baseline ref, and the last
-  writer wins.
+- **Two panes on one worktree drift a little** — they agree on turn boundaries, but each
+  snapshots on its own poll clock, so their last-turn baselines can differ by the edits made
+  between the two samples.
 
 **Budgets**
 - Files over 2 MB or 50,000 lines show a "too large" notice. Binary files get no diff.
@@ -479,7 +496,7 @@ just install   # build release → bin/herdr-reviewr, ad-hoc re-signed on macOS
 herdr plugin link .
 ```
 
-After every `just install`, toggle the sidebar off and on. An open pane keeps running the old
+After every `just install`, toggle the reviewr pane off and on. An open pane keeps running the old
 process. The loop only works while the plugin is linked: a `github:…` source in
 `herdr plugin list` runs a downloaded binary that local rebuilds never touch. Switch with:
 

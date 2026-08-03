@@ -1,9 +1,9 @@
 [package]
 name = "herdr-reviewr"
-version = "0.24.1"
+version = "0.29.0"
 edition = "2024"
 rust-version = "1.97"
-description = "A herdr-native review sidebar: browse an agent's changes and send comments back to chat, in the terminal."
+description = "A terminal review pane for herdr: browse an agent's changes and send comments back to chat."
 authors = ["Dmitry Persiyanov <dmitry.persiyanov@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/persiyanov/herdr-reviewr"
@@ -14,7 +14,7 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 anyhow = "1"
 ansi-to-tui = "8.0.1"
-dirs = "5"
+dirs = "6"
 fff-search = "0.10.0"
 nix = { version = "0.29", features = ["process", "signal"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }

@@ -42,11 +42,11 @@ times tells you which panes are still old.
 ## Rule 3: only the user restarts panes
 
 The plugin's `open` and `toggle` actions act on the **focused workspace**, whatever
-`HERDR_WORKSPACE_ID` says. Scripting them from outside herdr stacks every new sidebar into
+`HERDR_WORKSPACE_ID` says. Scripting them from outside herdr stacks every new pane into
 whichever workspace happens to be focused. Closing is safe
-(`bash <plugin>/herdr/sidebar.sh close` sweeps only labeled panes in the named workspace), but
-opening is not. After the swap, tell the user: press the reviewr toggle in each space you want
-on the new build. Do not automate it.
+(`herdr plugin action invoke close --plugin persiyanov.reviewr` sweeps the focused workspace's
+reviewr panes), but opening is not. After the swap, tell the user: press the reviewr toggle in
+each space you want on the new build. Do not automate it.
 
 ## Verify
 

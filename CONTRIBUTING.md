@@ -11,7 +11,7 @@ first build) and [`just`](https://github.com/casey/just).
 git clone https://github.com/persiyanov/herdr-reviewr
 cd herdr-reviewr
 just test          # the test suite
-just run           # run the sidebar against this repo
+just run           # run reviewr against this repo
 cargo run -- ~/some/repo   # or against any repo
 ```
 

@@ -22,6 +22,7 @@ pub enum Action {
     Wrap,
     Preview,
     NavigatorPosition,
+    NavigatorHide,
     NavigatorGrow,
     NavigatorShrink,
     Select,
@@ -43,7 +44,7 @@ pub enum Action {
 
 /// One bound key: a base character, alone or under a `ctrl`/`alt` modifier. A modifier-less
 /// `Key` is the bare character the keymap answered before chords existed
-/// (`specs/config.md` `CFG-KEY-FORM`).
+/// (`specs/config.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
     pub ctrl: bool,
@@ -83,7 +84,7 @@ impl std::fmt::Display for Key {
 
 /// Every action with its config name and default keys — the single source the default keymap,
 /// the name lookup, and the config error message are built from.
-const ACTIONS: [(Action, &str, &[Key]); 32] = [
+const ACTIONS: [(Action, &str, &[Key]); 33] = [
     (Action::Down, "down", &[Key::plain('j')]),
     (Action::Up, "up", &[Key::plain('k')]),
     (Action::NextHunk, "next-hunk", &[Key::plain(']')]),
@@ -99,6 +100,7 @@ const ACTIONS: [(Action, &str, &[Key]); 32] = [
     (Action::Wrap, "wrap", &[Key::plain('w')]),
     (Action::Preview, "preview", &[Key::plain('m')]),
     (Action::NavigatorPosition, "navigator-position", &[Key::plain('p')]),
+    (Action::NavigatorHide, "navigator-hide", &[Key::plain('z')]),
     (Action::NavigatorGrow, "navigator-grow", &[Key::plain('<')]),
     (Action::NavigatorShrink, "navigator-shrink", &[Key::plain('>')]),
     (Action::Select, "select", &[Key::plain('v')]),
@@ -171,7 +173,7 @@ pub fn default_keymap() -> &'static Keymap {
 impl Keymap {
     /// Apply `[keybindings]` overrides to the defaults. An overridden action answers exactly its
     /// configured keys; every other action keeps its defaults. A key bound twice anywhere is a
-    /// collision (`CFG-KEY-UNIQUE`, `specs/config.md`); the error detail names each action involved.
+    /// collision (`specs/config.md`); the error detail names each action involved.
     pub fn resolve(overrides: &[(Action, Vec<Key>)]) -> Result<Self, String> {
         let mut keymap = Self::default();
         for (action, keys) in overrides {
@@ -245,6 +247,7 @@ mod tests {
         assert_eq!(keymap.action_for(Key::plain('S')), Some(Action::Send));
         assert_eq!(keymap.action_for(Key::plain('m')), Some(Action::Preview));
         assert_eq!(keymap.action_for(Key::plain('p')), Some(Action::NavigatorPosition));
+        assert_eq!(keymap.action_for(Key::plain('z')), Some(Action::NavigatorHide));
         assert_eq!(keymap.action_for(Key::plain('x')), None);
         assert_eq!(keymap.action_for(Key::plain('?')), Some(Action::Keys));
         assert_eq!(keymap.hint(Action::Send), Key::plain('s'));

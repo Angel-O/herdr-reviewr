@@ -59,9 +59,36 @@ pub fn is_repo(path: &Path) -> bool {
     git_ok(path, &["rev-parse", "--is-inside-work-tree"])
 }
 
-/// The git top-level of `path`, or `None` if it is not a repo.
+/// The git top-level of `path`, or `None` if it is not a repo. Collapses "git ran and said no"
+/// and "git could not run" — use [`worktree_of`] when that difference matters.
 pub fn toplevel(path: &Path) -> Option<PathBuf> {
-    git_line(path, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+    match worktree_of(path) {
+        Worktree::Root(root) => Some(root),
+        Worktree::Outside | Worktree::Unknown => None,
+    }
+}
+
+/// A directory's git top level, keeping "git ran and it is outside any worktree" (`Outside`, a
+/// determination) apart from "git could not be run at all" (`Unknown`, the absence of one — a
+/// spawn error under load). A caller deciding membership must hold on `Unknown` rather than read
+/// it as `Outside` (`specs/herdr-host.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Worktree {
+    Root(PathBuf),
+    Outside,
+    Unknown,
+}
+
+/// Resolve `path` to its worktree, distinguishing the two ways resolution yields no root.
+pub fn worktree_of(path: &Path) -> Worktree {
+    match Command::new("git").arg("-C").arg(path).args(["rev-parse", "--show-toplevel"]).output() {
+        Err(_) => Worktree::Unknown,
+        Ok(out) if !out.status.success() => Worktree::Outside,
+        Ok(out) => match String::from_utf8_lossy(&out.stdout).trim() {
+            "" => Worktree::Outside,
+            root => Worktree::Root(PathBuf::from(root)),
+        },
+    }
 }
 
 /// The forge a repository target belongs to. Part of the target's identity: the same path on
@@ -1141,6 +1168,26 @@ mod tests {
 
     fn azure_devops(host: &str) -> ForgeHosts<'_> {
         ForgeHosts { azure_devops: Some(host), ..NONE }
+    }
+
+    #[test]
+    fn worktree_of_distinguishes_a_repo_from_a_plain_directory() {
+        use super::{Worktree, worktree_of};
+        // A plain directory git can read but that holds no worktree.
+        let outside = tempfile::tempdir().unwrap();
+        assert_eq!(worktree_of(outside.path()), Worktree::Outside);
+        // A real worktree resolves to its root. Compare against std canonicalization, an oracle
+        // independent of `worktree_of` (both git and std resolve the temp dir's symlinks).
+        let repo = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let canonical = std::fs::canonicalize(repo.path()).unwrap();
+        assert_eq!(worktree_of(repo.path()), Worktree::Root(canonical));
     }
 
     #[test]

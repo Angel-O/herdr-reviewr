@@ -1,4 +1,4 @@
-//! herdr-reviewr — a herdr-native review sidebar.
+//! herdr-reviewr — a herdr-native review pane.
 //!
 //! Browse an agent's changes (uncommitted / branch), leave line-range comments,
 //! and send them back to the agent (or the clipboard) — entirely in a herdr pane.
@@ -52,23 +52,25 @@ use ratatui::layout::Rect;
 
 use crate::app::{App, Focus, Mode};
 use crate::config::{Config, PluginConfig};
-use crate::export::{Agent, Clipboard};
+use crate::export::Clipboard;
 use crate::keymap::Keymap;
 use crate::model::Scope;
 
+/// The status-line note a slow config-dir lookup paints before its answer swaps the frame,
+/// and retracts if the lookup resolves nothing (`policies/ux-responsiveness.md`).
+const RESOLVING_NOTE: &str = "resolving plugin config…";
+
 /// Entry point: parse config, set up the terminal, run the loop, restore.
 pub fn run() -> Result<()> {
-    let cfg = Config::from_env();
+    let mut cfg = Config::from_env();
     log::init();
-    let initial_config = config::plugin_config();
-    let mut app = match &initial_config {
-        Ok(plugin_config) => ready_app(&cfg, plugin_config.clone()),
-        Err(error) => {
-            let mut app = App::blocked(cfg.repo.clone(), Scope::Uncommitted, cfg.base.clone());
-            app.set_config_error(error.to_string());
-            app
-        }
-    };
+    // The config directory resolves once, at startup; every later read rereads only the
+    // file inside it (`specs/config.md`). Only the environment names it here: the CLI
+    // fallback is a herdr subprocess, so it waits until after the first paint below —
+    // a wedged herdr must never hold the paint (issue #4).
+    cfg.plugin_config_dir = config::resolve_config_dir(|| None);
+    let mut initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
+    let mut app = app_for(&cfg, &initial_config);
 
     let mut terminal = ratatui::init();
     // Bracketed paste so a multi-line paste arrives as one event, not raw keystrokes whose
@@ -86,11 +88,47 @@ pub fn run() -> Result<()> {
     }
     // Render before the first load, so a slow, failing, or hung `git` scan shows the reviewr UI
     // instead of the blank pane herdr leaves when the process blocks or exits before it renders
-    // (issue #4). Paint the empty frame first; then the initial load, non-fatal — an error opens
-    // the sidebar with the reason in the status line, the same contract as a failed poll refresh.
+    // (issue #4). Paint the empty frame first; then the initial load, non-fatal — an error
+    // opens the pane with the reason in the status line, the same contract as a failed poll
+    // refresh.
     if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
         restore_terminal(kbd);
         return Err(error.into());
+    }
+    // The cosmetic pane label, stamped after the first paint and cleared on a normal exit
+    // (`specs/herdr-host.md` Pane identity). Display only: identity is the process.
+    herdr::label_pane();
+    // The CLI half of config-dir resolution, on a painted pane: with no environment
+    // directory, ask herdr and rebuild from the directory it names. Nothing user-held
+    // exists yet — the rebuild happens before the first load — and a wedged herdr
+    // degrades this pane to the defaults instead of holding herdr's blank grid
+    // (issue #4, `specs/config.md` The file). A slow answer paints its note
+    // first, so the config swap is never a silent stale-then-swap; a fast one shows
+    // nothing (`policies/ux-responsiveness.md`).
+    let cli_dir = cfg
+        .plugin_config_dir
+        .is_none()
+        .then(|| {
+            herdr::plugin_config_dir_with(|| {
+                app.status = RESOLVING_NOTE.into();
+                let _ = terminal.draw(|f| ui::render(f, &app));
+            })
+        })
+        .flatten();
+    if let Some(dir) = cli_dir {
+        cfg.plugin_config_dir = Some(dir.into());
+        initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
+        app = app_for(&cfg, &initial_config);
+        if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
+            restore_terminal(kbd);
+            herdr::clear_pane_label();
+            return Err(error.into());
+        }
+    }
+    // A slow lookup that then resolved nothing leaves its note behind; retract it.
+    if app.status == RESOLVING_NOTE {
+        app.status.clear();
+        let _ = terminal.draw(|f| ui::render(f, &app));
     }
     if initial_config.is_ok()
         && let Err(e) = app.reload()
@@ -98,7 +136,9 @@ pub fn run() -> Result<()> {
         logln!("startup reload failed: {e:#}");
         app.status = format!("load failed: {e}");
     }
-    event_loop(&mut terminal, &mut app, &cfg, kbd)
+    let result = event_loop(&mut terminal, &mut app, &cfg, kbd);
+    herdr::clear_pane_label();
+    result
 }
 
 /// Leave the alternate screen and release terminal input modes before any bounded worker drain.
@@ -110,11 +150,34 @@ fn restore_terminal(kbd: bool) {
     ratatui::restore();
 }
 
-/// Build a fresh working sidebar only after the plugin configuration has validated.
+/// The reviewed repository, resolved to its git top level. Every `App` goes through this,
+/// blocked or ready, so the app and the worker's `TurnHost` hold the same spelling: they key
+/// the baseline ref off it independently, and turn membership compares resolved top levels
+/// against it (`specs/herdr-host.md`).
+///
+/// A non-repo path is not an error — the pane opens to an empty state and starts showing
+/// changes if the directory becomes a repo.
+fn repo_root(cfg: &Config) -> std::path::PathBuf {
+    git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
+}
+
+/// The startup app for one config snapshot: ready on `Ok`, blocked with the error on
+/// `Err`. Both the env-resolved build and the post-paint CLI-resolved rebuild go through
+/// here, so the two paths cannot drift.
+fn app_for(cfg: &Config, initial_config: &Result<PluginConfig, config::PluginConfigError>) -> App {
+    match initial_config {
+        Ok(plugin_config) => ready_app(cfg, plugin_config.clone()),
+        Err(error) => {
+            let mut app = App::blocked(repo_root(cfg), Scope::Uncommitted, cfg.base.clone());
+            app.set_config_error(error.to_string());
+            app
+        }
+    }
+}
+
+/// Build a fresh working reviewr pane only after the plugin configuration has validated.
 fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
-    // A non-repo path is not an error — the sidebar opens to an empty state and starts showing
-    // changes if the directory becomes a repo (specs/herdr-host.md).
-    let repo = git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone());
+    let repo = repo_root(cfg);
     let scope = plugin_config.default_scope();
     logln!(
         "start repo={} poll={:?} base={:?} scope={}",
@@ -137,7 +200,7 @@ const STATUS_TTL: Duration = Duration::from_secs(4);
 
 /// While the `PR` tab is active, refetch the forge at least this often — a fallback for
 /// forge-side changes with no local signal (a reviewer's comment). Local pushes and forge PR
-/// actions refresh sooner, on the agent's turn-end, so this cadence is the slow safety net
+/// actions refresh sooner, on the worktree's turn-end, so this cadence is the slow safety net
 /// (specs/forge-host.md).
 const PR_POLL: Duration = Duration::from_mins(1);
 
@@ -534,10 +597,13 @@ pub fn land_world_completion(
     generation: u64,
 ) -> bool {
     app.sync_turn_baseline(completion.input.turn_baseline.clone());
-    if completion.turn.as_ref().is_some_and(|t| t.ended) {
-        // One fetch per turn, on any tab: the turn may have pushed or merged, and
-        // entering the tab then finds fresh work already underway (forge-host.md).
-        app.request_pr_refresh(crate::app::RefreshKind::Ambient);
+    if let Some(turn) = completion.turn.as_ref() {
+        app.sync_agents_present(turn.agents_present);
+        if turn.ended {
+            // One fetch per turn, on any tab: the turn may have pushed or merged, and
+            // entering the tab then finds fresh work already underway (forge-host.md).
+            app.request_pr_refresh(crate::app::RefreshKind::Ambient);
+        }
     }
     if completion.generation != generation {
         // A superseding job carries reveal=false, so a superseded switch's reveal would
@@ -657,7 +723,7 @@ fn event_loop(
             if let Ok((epoch, target, mut recovered)) = recovery_rx.try_recv() {
                 recovery_inflight = false;
                 if epoch == config_epoch {
-                    match config::plugin_config() {
+                    match config::plugin_config(cfg.plugin_config_dir.as_deref()) {
                         Ok(current) if current == target => {
                             recovered.carry_authored_state_from(app);
                             *app = recovered;
@@ -750,7 +816,9 @@ fn event_loop(
             }
             app.bound_diff_scroll(&heights, effective);
             let file_vp = ui::file_viewport_height(area, app);
-            if std::mem::take(&mut app.reveal_files) {
+            // While the navigator is hidden its viewport is zero, and a reveal computed
+            // there would zero the kept scroll — it stays pending for the show frame.
+            if !app.navigator_hidden_here() && std::mem::take(&mut app.reveal_files) {
                 app.reveal_file_cursor(file_vp);
             }
             app.bound_file_scroll(file_vp);
@@ -1074,10 +1142,10 @@ fn event_loop(
                     continue;
                 }
                 schedule_poll_probe(&mut pr, app.tab);
-                // The tick's refresh runs on the worker. The same request samples the agent's
-                // status there, so a turn promoted by the sample is visible to the same
-                // request's changed-files build (specs/herdr-host.md). A turn end sets the PR
-                // refetch when the completion lands.
+                // The tick's refresh runs on the worker. The same request samples the agents
+                // in the worktree there, so a turn promoted by the sample is visible to the
+                // same request's changed-files build (specs/herdr-host.md). A turn end sets
+                // the PR refetch when the completion lands.
                 app.request_world_refresh(true, false);
                 logln!(
                     "poll files={} composing={} diff_cursor={} scroll={}",
@@ -1234,7 +1302,7 @@ fn observe_plugin_config(
         epoch,
         recovery_tx,
         recovery_inflight,
-        config::plugin_config(),
+        config::plugin_config(cfg.plugin_config_dir.as_deref()),
     )
 }
 
@@ -1410,6 +1478,34 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
         app.disarm_cross();
     }
 
+    // The agent picker is strictly modal: `enter` sends, `esc` cancels, the movement bindings
+    // and the literal digits move the highlight, and every other key is inert. `q` must not
+    // quit here and `y` must not copy, or a habitual keystroke destroys or consumes the whole
+    // review while the picker is up (`specs/input.md`). It is checked before the tab handlers,
+    // like every other modal, so no tab can ever eat the modal's keys.
+    if app.mode == Mode::Picker {
+        // The send is irreversible and consumes every comment, so only the bare key fires it:
+        // `alt+enter` and `shift+enter` mean "newline, not submit" in the comment editor the
+        // reviewer was in moments ago, and that muscle memory must not send a review. The digits
+        // are literal here, whatever `tab-changes` and its siblings are bound to, so a chord
+        // carrying one must not move the highlight either. `esc` stays deliberately permissive:
+        // cancelling is always safe, and no stray modifier should trap anyone in the modal.
+        let bare = key.modifiers.is_empty();
+        match (action, key.code) {
+            (_, Esc) => app.close_picker(),
+            (_, Enter) if bare => app.picker_pick(),
+            // The digits outrank the movement bindings, so a reviewer who bound `down` to a
+            // digit still gets the row that digit names (`specs/input.md`).
+            (_, Char(c @ '1'..='9')) if bare => {
+                app.picker_goto(c as usize - '1' as usize);
+            }
+            (Some(K::Down), _) => app.picker_move(1),
+            (Some(K::Up), _) => app.picker_move(-1),
+            _ => {}
+        }
+        return Ok(());
+    }
+
     // The read-only PR tab: navigate the snapshot and open links; authoring actions are inert.
     if app.tab == crate::app::Tab::Pr {
         match (action, key.code) {
@@ -1446,8 +1542,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             (Some(K::Comments), _) | (_, Esc) => app.close_list(),
             (Some(K::Down), _) => app.list_move(1),
             (Some(K::Up), _) => app.list_move(-1),
-            (Some(K::Send), _) => app.export(&Agent),
-            (Some(K::Copy), _) => app.export(&Clipboard),
+            (Some(K::Send), _) => app.send_to_agent(),
+            (Some(K::Copy), _) => {
+                app.export(&Clipboard);
+            }
             (Some(K::Edit), _) => app.start_edit(),
             (Some(K::Delete), _) => app.delete_comment(),
             _ => {}
@@ -1474,6 +1572,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::Wrap => app.toggle_wrap(),
             K::Preview => app.toggle_preview(),
             K::NavigatorPosition => app.cycle_navigator_position(),
+            K::NavigatorHide => app.toggle_navigator_hidden(),
             K::NavigatorGrow => app.resize_navigator(4),
             K::NavigatorShrink => app.resize_navigator(-4),
             K::ScopeUncommitted => app.set_scope(Scope::Uncommitted)?,
@@ -1486,8 +1585,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             // off-screen cursor. (The comments-list overlay targets the highlighted row instead.)
             K::Edit if app.focus == Focus::Diff => app.start_edit(),
             K::Delete if app.focus == Focus::Diff => app.delete_comment(),
-            K::Send => app.export(&Agent),
-            K::Copy => app.export(&Clipboard),
+            K::Send => app.send_to_agent(),
+            K::Copy => {
+                app.export(&Clipboard);
+            }
             K::NextComment => app.jump_comment(1),
             K::PrevComment => app.jump_comment(-1),
             K::Comments => app.open_list(),
@@ -1590,8 +1691,18 @@ pub fn handle_mouse(
 
     // A modal captures new mouse gestures, but a divider gesture cancelled by the key that
     // opened it still owns its remaining drag and mouse-up events.
-    if app.composing() || app.mode == Mode::List {
+    if app.mode.is_modal() {
         match m.kind {
+            // A click moves the highlight; a click on the already-highlighted row sends. The
+            // highlight is armed when the picker opens, so a first click on the armed row
+            // sends straight away (`specs/input.md`). Every other gesture is inert.
+            MouseEventKind::Down(MouseButton::Left) if app.mode == Mode::Picker => {
+                match ui::hit_picker_row(area, app, m.column, m.row) {
+                    Some(i) if i == app.picker_cursor => app.picker_pick(),
+                    Some(i) => app.picker_goto(i),
+                    None => {}
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if app.divider_drag_captured() => {
                 return Ok(());
             }
@@ -1604,8 +1715,9 @@ pub fn handle_mouse(
     }
     // A mouse gesture is one of the "any other input" that drops an armed crossing: the reviewer
     // who reaches for the mouse has left the file's edge behind (`specs/input.md`). Pointer motion
-    // is not a gesture — capture reports every move over the pane, and a pointer resting on the
-    // sidebar would otherwise disarm the crossing without the reviewer touching anything.
+    // is not a gesture — capture reports every move over the pane, and a pointer resting on
+    // the reviewr pane would otherwise disarm the crossing without the reviewer touching
+    // anything.
     if !matches!(m.kind, MouseEventKind::Moved) {
         app.disarm_cross();
     }
@@ -1677,7 +1789,7 @@ pub fn handle_mouse(
                 match hit {
                     ui::HeaderHit::Tab(tab) => app.set_tab(tab)?,
                     ui::HeaderHit::Scope => app.set_scope(app.scope.cycle())?,
-                    ui::HeaderHit::Send => app.export(&Agent),
+                    ui::HeaderHit::Send => app.send_to_agent(),
                 }
             } else if let Some(i) =
                 ui::hit_file(area, app, m.column, m.row, app.file_rows.len(), app.file_scroll)
@@ -2472,7 +2584,7 @@ mod refresh_tests {
     }
 
     #[test]
-    fn default_scope_seeds_a_fresh_sidebar_and_a_reread_never_switches_it() {
+    fn default_scope_seeds_a_fresh_pane_and_a_reread_never_switches_it() {
         let repo = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
         let path = config_dir.path().join("config.toml");
