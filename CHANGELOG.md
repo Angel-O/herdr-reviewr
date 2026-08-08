@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.1] — 2026-08-08
+
+### Fixed
+- **Selecting upward.** A range selected from the bottom up now comments on every line in it, not just the line it started from ([#50](https://github.com/persiyanov/herdr-reviewr/issues/50)).
+
 ## [0.30.0] — 2026-08-08
 
 ### Added
