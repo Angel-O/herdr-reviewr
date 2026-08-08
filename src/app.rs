@@ -1783,16 +1783,22 @@ impl App {
         self.file_scroll = bound(self.file_scroll, self.file_rows.len(), viewport);
     }
 
-    /// Scroll the diff so `diff_cursor`'s row fits the `viewport`-display-row window —
+    /// Scroll the diff so the reveal target's row fits the `viewport`-display-row window —
     /// `heights` is each visible row's display height (wrap + comment cards). Called once
     /// per frame when a navigation requested a reveal, not on a wheel scroll.
+    ///
+    /// The target is the cursor, except while composing: the box opens under the selection's
+    /// last line (`specs/tui.md`), so that line is what has to stay in view. A selection built
+    /// upward has its cursor at the top, and following the cursor there would leave the box
+    /// off the bottom — the selection covers the same rows either way (`specs/diff-view.md`).
     pub fn reveal_diff_cursor(&mut self, heights: &[usize], viewport: usize) {
         if self.visible.is_empty() {
             self.diff_scroll = 0;
             return;
         }
-        let cursor = self.diff_cursor.min(self.visible.len() - 1);
-        self.diff_scroll = keep_in_view(cursor, self.diff_scroll, heights, viewport);
+        let target = if self.composing() { self.selection_range().1 } else { self.diff_cursor };
+        let target = target.min(self.visible.len() - 1);
+        self.diff_scroll = keep_in_view(target, self.diff_scroll, heights, viewport);
     }
 
     /// Clamp `diff_scroll` within range (no blank tail). Called every frame. Height-aware:
@@ -2557,9 +2563,6 @@ impl App {
             return; // the preview is read-only (specs/diff-view.md)
         }
         if self.focus == Focus::Diff && self.has_anchorable_selection() {
-            // Anchor the cursor at the selection's last line so the scroll keeps it (and
-            // the box drawn beneath it) in view.
-            self.diff_cursor = self.selection_range().1;
             self.reveal_diff = true; // scroll the anchored line into view before the box opens
             self.input.clear();
             self.caret = 0;

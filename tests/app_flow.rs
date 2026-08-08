@@ -1977,6 +1977,70 @@ fn a_multi_line_range_comment_spans_lines_and_keeps_the_whole_snippet() {
 }
 
 #[test]
+fn an_upward_range_comment_spans_the_same_lines_as_a_downward_one() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+
+    // Anchor two rows below the first changed line, then extend the selection upward.
+    let first = row_with(&app, '-');
+    app.diff_cursor = first + 2;
+    app.toggle_select();
+    app.move_cursor(-1).unwrap();
+    app.move_cursor(-1).unwrap();
+    let (lo, hi) = app.selection_range();
+    assert_eq!((lo, hi), (first, first + 2), "selection spans all three rows");
+
+    app.start_comment();
+    for ch in "this whole hunk is suspicious".chars() {
+        app.input_push(ch);
+    }
+    app.submit_comment();
+
+    let c = app.store.iter().next().expect("a comment");
+    assert!(c.end > c.start, "comment covers a line range: {}..{}", c.start, c.end);
+    assert!(c.lines.lines().count() >= 2, "snippet keeps every selected line: {:?}", c.lines);
+}
+
+#[test]
+fn the_composer_reserve_follows_the_selections_last_line_not_the_cursor() {
+    use std::fmt::Write as _;
+    let r = Repo::init();
+    let mut original = String::new();
+    for i in 0..60 {
+        writeln!(original, "line {i}").unwrap();
+    }
+    r.write("big.rs", &original);
+    r.commit_all("init");
+    r.write("big.rs", &original.replace("line", "LINE"));
+
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    // Anchor low, extend upward far enough that the two ends cannot share a viewport.
+    app.diff_cursor = 40;
+    app.toggle_select();
+    for _ in 0..20 {
+        app.move_cursor(-1).unwrap();
+    }
+    app.start_comment();
+    for ch in "one\ntwo\nthree".chars() {
+        app.input_push(ch);
+    }
+
+    let viewport = 12;
+    let effective = viewport - herdr_reviewr::ui::composer_height(&app, 80);
+    clamp(&mut app, effective);
+    let anchored = app.selection_range().1;
+    assert!(
+        (app.diff_scroll..app.diff_scroll + effective).contains(&anchored),
+        "the box's anchor line {} stays in the reserved viewport [{}, {})",
+        anchored,
+        app.diff_scroll,
+        app.diff_scroll + effective
+    );
+}
+
+#[test]
 fn scope_cannot_change_while_composing() {
     let r = edited_repo();
     let mut app = app_on(&r);
