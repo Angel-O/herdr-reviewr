@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-08-08
+
+### Added
+- **Base picker.** `B`, or a click on the base name, picks the branch the `branch` scope diffs against, remembered per repository.
+- **The header names the base.** `vs dev` while it resolves, `vs main · dev missing` when a pick stops resolving, `no base` when nothing does.
+
+### Changed
+- **One resolution chain.** `--base`, then your pick, then `origin/HEAD`, and no guessing anywhere in it.
+- **`base_branches` is retired.** A config still carrying the key fails to load. Drop it and press `B` instead.
+- **The `All files` tab reads `Files`,** the header stats moved to the right, and the header `Send` button is gone.
+
 ## [0.29.0] — 2026-08-01
 
 ### Changed
