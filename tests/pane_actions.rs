@@ -12,7 +12,8 @@ fn reviewr_bin() -> &'static str {
 /// A fake herdr, answering in the live 0.7.5 envelope shapes (docs/herdr-api-notes.md).
 /// `pane list` serves `panes.json` (else one plain pane), `pane process-info` serves the
 /// per-pane `procinfo-<id>.json` (else a plain shell, which is not a reviewr pane) or fails
-/// with `procfail-<id>.json` on stderr, `pane close` succeeds unless `closefail-<id>`
+/// with `procfail-<id>.json` on stderr, `pane get` serves `paneget-<id>.json` (else a bare
+/// pane without a foreground cwd), `pane close` succeeds unless `closefail-<id>`
 /// exists (whose content becomes the failure's stderr), `plugin config-dir` names the
 /// fixture dir itself (after a 5s hang when `configdir-hang` exists), and everything else
 /// answers as a successful `plugin pane open`.
@@ -34,6 +35,9 @@ fn fake_herdr(dir: &Path) -> (PathBuf, PathBuf) {
                 "    if [ -f \"$dir/procfail-$4.json\" ]; then cat \"$dir/procfail-$4.json\" >&2; exit 1; fi\n",
                 "    if [ -f \"$dir/procinfo-$4.json\" ]; then cat \"$dir/procinfo-$4.json\";\n",
                 "    else printf '%s\\n' '{{\"result\":{{\"process_info\":{{\"foreground_process_group_id\":7,\"foreground_processes\":[{{\"pid\":7,\"name\":\"zsh\",\"argv0\":\"zsh\",\"argv\":[\"-zsh\"],\"cwd\":\"/\"}}],\"pane_id\":\"'\"$4\"'\",\"shell_pid\":1}}}}}}'; fi ;;\n",
+                "  'pane get '*)\n",
+                "    if [ -f \"$dir/paneget-$3.json\" ]; then cat \"$dir/paneget-$3.json\";\n",
+                "    else printf '%s\\n' '{{\"result\":{{\"pane\":{{\"pane_id\":\"'\"$3\"'\"}}}}}}'; fi ;;\n",
                 "  'pane close '*)\n",
                 "    if [ -f \"$dir/closefail-$3\" ]; then cat \"$dir/closefail-$3\" >&2; exit 1; fi\n",
                 "    printf '%s\\n' '{{\"result\":{{}}}}' ;;\n",
@@ -82,6 +86,11 @@ fn run(mode: &str, config_dir: &Path, herdr: &Path) -> Output {
 /// placement and `plugin pane open` stages.
 fn run_open(config_dir: &Path, herdr: &Path) -> Output {
     let context = serde_json::json!({"focused_pane_cwd": env!("CARGO_MANIFEST_DIR")}).to_string();
+    run_open_with_context(config_dir, herdr, &context)
+}
+
+/// An `open` with a caller-shaped action context.
+fn run_open_with_context(config_dir: &Path, herdr: &Path, context: &str) -> Output {
     Command::new("bash")
         .arg("herdr/pane.sh")
         .arg("open")
@@ -539,6 +548,63 @@ fn tab_placement_open_names_its_fresh_tab() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let calls = fs::read_to_string(&log).unwrap();
     assert!(calls.contains("tab rename w1:t9 reviewr"), "{calls}");
+}
+
+// --- Open cwd: the focused pane's live foreground cwd, then the context's launch cwd.
+
+#[test]
+fn open_prefers_the_focused_panes_live_foreground_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The launch cwd is not a git repo: an open that trusted it would refuse. The pane's
+    // live foreground cwd is the reviewed repo — the `claude -w <worktree>` shape, where
+    // the agent chdirs into the worktree only inside its own process after launching
+    // from the main checkout.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+    fs::write(
+        dir.path().join("paneget-w1:p1.json"),
+        format!(
+            r#"{{"result":{{"pane":{{"pane_id":"w1:p1","cwd":"{launch}","foreground_cwd":"{live}"}}}}}}"#,
+            launch = dir.path().display(),
+            live = env!("CARGO_MANIFEST_DIR"),
+        ),
+    )
+    .unwrap();
+
+    let output = run_open_with_context(dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must use the live foreground cwd: {calls}"
+    );
+}
+
+#[test]
+fn open_keeps_the_context_cwd_without_a_live_foreground_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The fake's default `pane get` answer carries no foreground cwd — a pane whose live
+    // read has nothing to add keeps the context cwd instead of losing it.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": env!("CARGO_MANIFEST_DIR"),
+    })
+    .to_string();
+
+    let output = run_open_with_context(dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must fall back to the context cwd: {calls}"
+    );
 }
 
 #[test]
