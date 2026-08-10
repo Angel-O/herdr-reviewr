@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-10
-Last edited: 2026-08-03
+Last edited: 2026-08-08
 ---
 
 # Configuration
@@ -15,7 +15,6 @@ A valid file may set any subset of the supported keys. A missing file and an omi
 ```toml
 theme = "tokyo-night"
 file_markdown_renderer = "glow -s {style} -w {width} -"
-base_branches = ["develop", "main", "master"]
 default_scope = "branch"
 navigator_position = "bottom"
 toggle_placement = "overlay"
@@ -35,7 +34,6 @@ find    = ["ctrl+f"]
 | ------------------------ | ------------------------------------------------------------------------------------------------- |
 | `theme`                  | one name from the theme set in `theme.md`                                                         |
 | `file_markdown_renderer` | non-empty command string with balanced double quotes, or omitted for built-in Markdown            |
-| `base_branches`          | non-empty array of non-empty branch names, `origin/` and `refs/` prefixes accepted                |
 | `default_scope`          | `uncommitted`, `branch`, or `last-turn`                                                           |
 | `navigator_position`     | `right`, `left`, `top`, or `bottom`                                                               |
 | `toggle_placement`       | `split`, `overlay`, `zoomed`, or `tab`                                                            |
@@ -94,8 +92,6 @@ An invalid first read blocks the plugin exactly like a later invalid read. A blo
 `file_markdown_renderer` splits on whitespace outside double quotes. Double quotes group one argument and are removed. The first argument is the program. reviewr executes the argv directly without a shell. Shell operators such as `|`, `>`, and `&&` are ordinary arguments.
 
 The command receives the Markdown file content on standard input. It never receives untrusted content as an argument. `{style}` inside an argument becomes `dark` or `light` from the active resolved theme. `{width}` inside an argument becomes the current preview width. The command applies only to file previews. It never changes PR descriptions or comments (`markdown.md`).
-
-Each `base_branches` entry canonicalizes to one bare branch name: a leading `refs/heads/`, `refs/remotes/origin/`, or `origin/` prefix is stripped. Duplicate entries collapse to the first occurrence. A consumer resolves an entry through `refs/remotes/origin/<name>`, then `refs/heads/<name>` (`review-model.md`). A repository may lack every ref a valid `base_branches` list names. That is runtime absence, never an invalid config.
 
 A hostname is recognized by at most one forge. A host key naming another host key's value, or any forge's built-in host, `*.visualstudio.com` included, is an invalid value (→ CFG-WHOLE-FILE).
 
