@@ -588,6 +588,42 @@ fn open_prefers_the_focused_panes_live_foreground_cwd() {
 }
 
 #[test]
+fn open_prefers_the_live_cwd_when_the_launch_cwd_is_also_a_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The motivating shape exactly: the launch cwd is itself a valid repo (the main
+    // checkout `claude -w <worktree>` was launched from), so a fallback-only read would
+    // pass every other test and still review the wrong repo. The live cwd must win.
+    let launch_repo = dir.path().join("main-checkout");
+    fs::create_dir(&launch_repo).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&launch_repo)
+            .arg("init")
+            .arg("-q")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": launch_repo.to_str().unwrap(),
+    })
+    .to_string();
+    pane_with_cwd(dir.path(), "w1:p1", Path::new(env!("CARGO_MANIFEST_DIR")));
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the live cwd must win over a launch cwd that is also a repo: {calls}"
+    );
+}
+
+#[test]
 fn open_keeps_the_context_cwd_without_a_live_foreground_cwd() {
     let dir = tempfile::tempdir().unwrap();
     let (herdr, log) = fake_herdr(dir.path());

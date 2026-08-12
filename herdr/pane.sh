@@ -241,7 +241,7 @@ live=""
 if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
   fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
   [ -z "$fp" ] || live=$(printf '%s' "$panes_json" |
-    jq -r --arg p "$fp" '.result.panes[] | select(.pane_id == $p) | .foreground_cwd // empty' 2>/dev/null)
+    jq -r --arg p "$fp" 'first(.result.panes[] | select(.pane_id == $p) | .foreground_cwd // empty)' 2>/dev/null)
 fi
 if is_git_repo "$live"; then
   cwd="$live"
