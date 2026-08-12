@@ -12,6 +12,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   built-in renderer remains the default and failure fallback. PR descriptions and comments keep
   their built-in clickable links and heading jumps.
 
+## [0.30.2] — 2026-08-12
+
+### Fixed
+- **Opening beside a worktree agent.** Opening reviewr next to a pane running `claude -w <worktree>` now reviews the worktree's branch, not the main checkout's. The open follows where the pane's program actually is and falls back to the pane's starting directory when that place is not a git repo. Thanks [@KyongSik-Yoon](https://github.com/KyongSik-Yoon) ([#59](https://github.com/persiyanov/herdr-reviewr/pull/59)).
+
 ## [0.30.1] — 2026-08-08
 
 ### Fixed
