@@ -231,20 +231,21 @@ esac
 # in the main checkout and chdirs into the worktree after launch) leaves the launch cwd
 # naming the wrong repo, and the review would open on the wrong branch. Prefer the focused
 # pane's live `foreground_cwd` when it lies in a git repo (specs/herdr-host.md, Repo
-# discovery); a failed read, or a live cwd outside any repo, keeps the context cwd — the
-# live read never refuses an open the context alone could place. The event never reads a
-# pane: its payload names the checkout above, and the guard on mode keeps close and a
-# closing toggle from paying the round-trip.
+# discovery), read from the pane-list snapshot already in hand — the focused pane sits in
+# the focused workspace, so the list carries it and the keypress path pays no extra herdr
+# round-trip (docs/herdr-api-notes.md). A live cwd outside any repo, or a pane the list is
+# missing, keeps the context cwd — the live read never refuses an open the context alone
+# could place. The mode guard keeps the event payload's cwd above in charge on auto-open.
+is_git_repo() { [ -n "$1" ] && git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1; }
+live=""
 if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
   fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
-  if [ -n "$fp" ]; then
-    live=$("$H" pane get "$fp" 2>/dev/null | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
-    [ -n "$live" ] && git -C "$live" rev-parse --show-toplevel >/dev/null 2>&1 && cwd="$live"
-  fi
+  [ -z "$fp" ] || live=$(printf '%s' "$panes_json" |
+    jq -r --arg p "$fp" '.result.panes[] | select(.pane_id == $p) | .foreground_cwd // empty' 2>/dev/null)
 fi
-
-# Only inside a git repo.
-if [ -z "$cwd" ] || ! git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
+if is_git_repo "$live"; then
+  cwd="$live"
+elif ! is_git_repo "$cwd"; then
   refuse "not a git repo: '${cwd:-<no cwd>}'"
 fi
 

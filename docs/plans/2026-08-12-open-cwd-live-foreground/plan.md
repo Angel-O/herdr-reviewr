@@ -12,10 +12,11 @@ PR #59 merged, matching the Repo discovery contract exactly: live foreground cwd
 
 ## Definition of Done
 
-- [ ] An open beside a `claude -w <worktree>` pane reviews the worktree (PR's existing test `open_prefers_the_focused_panes_live_foreground_cwd`).
-- [ ] A live cwd outside any git repo falls back to the launch cwd instead of refusing (new test).
-- [ ] A failed or empty live read falls back to the launch cwd (PR's existing test `open_keeps_the_context_cwd_without_a_live_foreground_cwd`).
-- [ ] `close`, a closing `toggle`, and `auto-open` issue no `pane get` (new assertions on the fake-herdr call log).
+- [x] An open beside a `claude -w <worktree>` pane reviews the worktree (PR's existing test `open_prefers_the_focused_panes_live_foreground_cwd`).
+- [x] A live cwd outside any git repo falls back to the launch cwd instead of refusing (`a_toggle_open_falls_back_when_the_live_cwd_is_not_a_repo`, run as a toggle).
+- [x] A missing live cwd falls back to the launch cwd (PR's existing test `open_keeps_the_context_cwd_without_a_live_foreground_cwd`).
+- [x] No action pays an extra herdr call: the live cwd comes from the pane-list snapshot the run already holds.
+- [x] The event open takes the payload cwd even when the live cwd is a repo (`auto_open_takes_the_event_payload_cwd_over_the_live_one`).
 - [ ] PR #59 merges with the contributor's commits intact.
 
 ## Out of Scope
@@ -25,12 +26,11 @@ PR #59 merged, matching the Repo discovery contract exactly: live foreground cwd
 
 ## Execution Plan
 
-1. [ ] `gh pr checkout 59`, then rebase onto `main` if behind.
-2. [ ] In `herdr/pane.sh`: move the live-read block from before the mode dispatch to after it, just above the "Opening from here on" repo check, gated `[ "$mode" != auto-open ]`.
-3. [ ] In the same block: accept `$live` only when `git -C "$live" rev-parse --show-toplevel` succeeds, else keep the context cwd.
-4. [ ] In `tests/pane_actions.rs`: add `open_falls_back_when_the_live_cwd_is_not_a_repo` (paneget fixture whose `foreground_cwd` is a non-repo tempdir, context cwd a repo, assert `--cwd <repo>` in the call log).
-5. [ ] In `tests/pane_actions.rs`: assert `pane get` absent from the call log in a close-path test and an auto-open test.
-6. [ ] Commit on top of the contributor's commits and push to their branch (`maintainerCanModify` is true).
+1. [x] `gh pr checkout 59`, then rebase onto `main` if behind.
+2. [x] In `herdr/pane.sh`: move the live-cwd block onto the open path, just above the repo check, gated `[ "$mode" != auto-open ]`.
+3. [x] In the same block: read `foreground_cwd` from the held `panes_json` snapshot and accept it only when `is_git_repo` passes, else keep the context cwd.
+4. [x] In `tests/pane_actions.rs`: serve `foreground_cwd` through `pane_with_cwd` pane-list fixtures, drop the fake's `pane get` verb, add the non-repo-fallback toggle test and the event-payload-wins auto-open test.
+5. [x] Commit on top of the contributor's commits and push to their branch (`maintainerCanModify` is true).
 
 ## Likely Files
 
@@ -50,4 +50,5 @@ PR #59 merged, matching the Repo discovery contract exactly: live foreground cwd
 ## Replan
 
 - If pushing to the fork branch fails despite `maintainerCanModify`, then recreate the branch in this repo from their head with commits intact and retarget the merge.
+- 2026-08-12: review found `pane list` entries already carry `foreground_cwd` (docs/herdr-api-notes.md, verified live 0.7.5) → the live read reuses the run's held snapshot and `pane get` drops entirely → pane.sh, tests, DoD.
 - 2026-08-12: initial plan.
