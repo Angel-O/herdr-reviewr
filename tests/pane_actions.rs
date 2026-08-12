@@ -671,6 +671,43 @@ fn a_toggle_open_falls_back_when_the_live_cwd_is_not_a_repo() {
 }
 
 #[test]
+fn open_takes_the_focused_panes_cwd_not_another_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // Two panes, both in repos: a decoy listed first and the focused pane after it. The
+    // lookup must key on the focused pane's id — a first-entry read would review the
+    // decoy's repo.
+    let decoy_repo = init_repo(dir.path(), "decoy-repo");
+    fs::write(
+        dir.path().join("panes.json"),
+        format!(
+            r#"{{"result":{{"panes":[{{"pane_id":"w1:p0","foreground_cwd":"{decoy}"}},{{"pane_id":"w1:p1","foreground_cwd":"{focused}"}}]}}}}"#,
+            decoy = decoy_repo.display(),
+            focused = env!("CARGO_MANIFEST_DIR"),
+        ),
+    )
+    .unwrap();
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must use the focused pane's cwd, not the decoy's: {calls}"
+    );
+    assert!(
+        !calls.contains(&format!("--cwd {}", decoy_repo.display())),
+        "the decoy pane's cwd must not be reviewed: {calls}"
+    );
+}
+
+#[test]
 fn a_refusal_names_the_rejected_live_cwd_too() {
     let dir = tempfile::tempdir().unwrap();
     let (herdr, _log) = fake_herdr(dir.path());
