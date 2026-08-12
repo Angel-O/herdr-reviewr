@@ -99,7 +99,7 @@ fn run_open_with_context(config_dir: &Path, herdr: &Path, context: &str) -> Outp
         .env("HERDR_BIN_PATH", herdr)
         .env("HERDR_WORKSPACE_ID", "workspace-1")
         .env("HERDR_PANE_ID", "w1:p1")
-        .env("HERDR_PLUGIN_CONTEXT_JSON", &context)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context)
         .output()
         .unwrap()
 }
@@ -605,6 +605,108 @@ fn open_keeps_the_context_cwd_without_a_live_foreground_cwd() {
         calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
         "the open must fall back to the context cwd: {calls}"
     );
+}
+
+#[test]
+fn open_falls_back_when_the_live_cwd_is_not_a_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The live foreground cwd sits outside any git repo — a shell that wandered off. The
+    // live read wins only inside a repo; here it yields to the context cwd rather than
+    // refusing an open the context alone could place (specs/herdr-host.md, Repo discovery).
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": env!("CARGO_MANIFEST_DIR"),
+    })
+    .to_string();
+    fs::write(
+        dir.path().join("paneget-w1:p1.json"),
+        format!(
+            r#"{{"result":{{"pane":{{"pane_id":"w1:p1","cwd":"{launch}","foreground_cwd":"{live}"}}}}}}"#,
+            launch = env!("CARGO_MANIFEST_DIR"),
+            live = dir.path().display(),
+        ),
+    )
+    .unwrap();
+
+    let output = run_open_with_context(dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "a non-repo live cwd must fall back to the context cwd: {calls}"
+    );
+}
+
+#[test]
+fn close_reads_no_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    let ui = r#"{"pid":8,"name":"herdr-reviewr","argv0":"herdr-reviewr","argv":["/plugin/bin/herdr-reviewr"],"cwd":"/w"}"#;
+    procinfo(dir.path(), "w1:p1", ui);
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": env!("CARGO_MANIFEST_DIR"),
+    })
+    .to_string();
+
+    let output = Command::new("bash")
+        .arg("herdr/pane.sh")
+        .arg("close")
+        .env("HERDR_REVIEWR_BIN", reviewr_bin())
+        .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_WORKSPACE_ID", "workspace-1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_PLUGIN_CONTEXT_JSON", &context)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    // The live cwd read serves only an open; a close never uses a cwd and pays no
+    // round-trip for one.
+    assert!(!calls.contains("pane get"), "a close must not read a pane's live cwd: {calls}");
+}
+
+#[test]
+fn auto_open_takes_the_event_payload_cwd_and_reads_no_pane() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The event open takes its directory from the payload and never reads a pane
+    // (specs/herdr-host.md, Repo discovery) — even with a focused-pane context present.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+    let event = serde_json::json!({
+        "data": {"workspace": {
+            "workspace_id": "workspace-9",
+            "worktree": {"checkout_path": env!("CARGO_MANIFEST_DIR")},
+        }},
+    })
+    .to_string();
+
+    let output = Command::new("bash")
+        .arg("herdr/pane.sh")
+        .arg("auto-open")
+        .env("HERDR_REVIEWR_BIN", reviewr_bin())
+        .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", &context)
+        .env("HERDR_PLUGIN_EVENT_JSON", &event)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the event open must use the payload cwd: {calls}"
+    );
+    assert!(!calls.contains("pane get"), "the event must not read a pane's live cwd: {calls}");
 }
 
 #[test]

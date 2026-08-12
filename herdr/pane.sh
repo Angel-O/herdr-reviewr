@@ -85,19 +85,6 @@ cwd=""
 [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ] &&
   cwd=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_cwd // .workspace_cwd // empty' 2>/dev/null)
 
-# The context's `focused_pane_cwd` is the pane's launch cwd. An agent that changes
-# directory only inside its own process (`claude -w <worktree>` starts in the main
-# checkout and chdirs into the worktree after launch) leaves the launch cwd naming the
-# wrong repo, and the review would open on the wrong branch. Prefer the focused pane's
-# live `foreground_cwd`; an unreadable read keeps the context cwd, never refuses.
-if [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
-  fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
-  if [ -n "$fp" ]; then
-    live=$("$H" pane get "$fp" 2>/dev/null | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
-    [ -n "$live" ] && cwd="$live"
-  fi
-fi
-
 # The event fires without a focused pane; target the fresh workspace from its payload
 # (worktree.created shape: .data.workspace.workspace_id, .data.workspace.worktree.checkout_path).
 if [ "$mode" = auto-open ] && [ -n "${HERDR_PLUGIN_EVENT_JSON:-}" ]; then
@@ -239,7 +226,24 @@ open | auto-open)
   ;;
 esac
 
-# Opening from here on. Only inside a git repo.
+# Opening from here on. The context's `focused_pane_cwd` is the pane's launch cwd. An
+# agent that changes directory only inside its own process (`claude -w <worktree>` starts
+# in the main checkout and chdirs into the worktree after launch) leaves the launch cwd
+# naming the wrong repo, and the review would open on the wrong branch. Prefer the focused
+# pane's live `foreground_cwd` when it lies in a git repo (specs/herdr-host.md, Repo
+# discovery); a failed read, or a live cwd outside any repo, keeps the context cwd — the
+# live read never refuses an open the context alone could place. The event never reads a
+# pane: its payload names the checkout above, and the guard on mode keeps close and a
+# closing toggle from paying the round-trip.
+if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
+  if [ -n "$fp" ]; then
+    live=$("$H" pane get "$fp" 2>/dev/null | jq -r '.result.pane.foreground_cwd // empty' 2>/dev/null)
+    [ -n "$live" ] && git -C "$live" rev-parse --show-toplevel >/dev/null 2>&1 && cwd="$live"
+  fi
+fi
+
+# Only inside a git repo.
 if [ -z "$cwd" ] || ! git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
   refuse "not a git repo: '${cwd:-<no cwd>}'"
 fi
