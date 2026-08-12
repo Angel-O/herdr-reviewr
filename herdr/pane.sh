@@ -246,7 +246,9 @@ fi
 if is_git_repo "$live"; then
   cwd="$live"
 elif ! is_git_repo "$cwd"; then
-  refuse "not a git repo: '${cwd:-<no cwd>}'"
+  # Name every candidate the check rejected, or a refusal over an inspected-but-unusable
+  # live cwd would read as if no directory was ever tried.
+  refuse "not a git repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
 fi
 
 # Focus follows the placement on a manual open; the event never takes it (spec A3, P5, P6).

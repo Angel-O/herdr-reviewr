@@ -66,6 +66,17 @@ fn procinfo(dir: &Path, pane: &str, entries: &str) {
     .unwrap();
 }
 
+/// A fresh git repo at `dir/name`, for tests that need a real second repo beside the
+/// crate's own.
+fn init_repo(dir: &Path, name: &str) -> PathBuf {
+    let repo = dir.join(name);
+    fs::create_dir(&repo).unwrap();
+    assert!(
+        Command::new("git").arg("-C").arg(&repo).arg("init").arg("-q").status().unwrap().success()
+    );
+    repo
+}
+
 /// One `pane list` answer: a single pane whose entry carries a live `foreground_cwd`,
 /// in the live envelope shape (docs/herdr-api-notes.md).
 fn pane_with_cwd(dir: &Path, pane: &str, foreground_cwd: &Path) {
@@ -594,18 +605,7 @@ fn open_prefers_the_live_cwd_when_the_launch_cwd_is_also_a_repo() {
     // The motivating shape exactly: the launch cwd is itself a valid repo (the main
     // checkout `claude -w <worktree>` was launched from), so a fallback-only read would
     // pass every other test and still review the wrong repo. The live cwd must win.
-    let launch_repo = dir.path().join("main-checkout");
-    fs::create_dir(&launch_repo).unwrap();
-    assert!(
-        Command::new("git")
-            .arg("-C")
-            .arg(&launch_repo)
-            .arg("init")
-            .arg("-q")
-            .status()
-            .unwrap()
-            .success()
-    );
+    let launch_repo = init_repo(dir.path(), "main-checkout");
     let context = serde_json::json!({
         "focused_pane_id": "w1:p1",
         "focused_pane_cwd": launch_repo.to_str().unwrap(),
@@ -671,24 +671,34 @@ fn a_toggle_open_falls_back_when_the_live_cwd_is_not_a_repo() {
 }
 
 #[test]
+fn a_refusal_names_the_rejected_live_cwd_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, _log) = fake_herdr(dir.path());
+    // No context cwd and a non-repo live cwd: the open refuses, and the one stderr line
+    // names the live directory it inspected and rejected — a refusal that hid it would
+    // read as if no directory was ever tried.
+    let context = serde_json::json!({"focused_pane_id": "w1:p1"}).to_string();
+    pane_with_cwd(dir.path(), "w1:p1", dir.path());
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a git repo"), "{stderr}");
+    assert!(
+        stderr.contains(dir.path().to_str().unwrap()),
+        "the refusal must name the rejected live cwd: {stderr}"
+    );
+}
+
+#[test]
 fn auto_open_takes_the_event_payload_cwd_over_the_live_one() {
     let dir = tempfile::tempdir().unwrap();
     let (herdr, log) = fake_herdr(dir.path());
     // The focused pane's live cwd is a real git repo, so only the mode guard keeps it
     // from winning: the event open takes its directory from the payload alone
     // (specs/herdr-host.md, Repo discovery).
-    let live_repo = dir.path().join("live-repo");
-    fs::create_dir(&live_repo).unwrap();
-    assert!(
-        Command::new("git")
-            .arg("-C")
-            .arg(&live_repo)
-            .arg("init")
-            .arg("-q")
-            .status()
-            .unwrap()
-            .success()
-    );
+    let live_repo = init_repo(dir.path(), "live-repo");
     pane_with_cwd(dir.path(), "w1:p1", &live_repo);
     let context = serde_json::json!({
         "focused_pane_id": "w1:p1",
