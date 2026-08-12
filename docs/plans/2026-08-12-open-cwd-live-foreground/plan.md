@@ -45,7 +45,7 @@ PR #59 merged, matching the Repo discovery contract exactly: live foreground cwd
 - `cargo test --test pane_actions` → all pass, including the PR's two existing tests unchanged.
 - `just ci` → clean.
 - Tight: everything the diff adds is exercised by a DoD line. Delete or defer the rest.
-- Gate: high-effort `/code-review` loop on the branch until clean, then `/garfield` end to end, then promote `specs/herdr-host.md` to Current.
+- Gate: high-effort `/code-review` loop on the branch until clean (4 rounds), then `/garfield` end to end (pass), then promote `specs/herdr-host.md` to Current. Done.
 
 ## Replan
 

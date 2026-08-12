@@ -226,16 +226,10 @@ open | auto-open)
   ;;
 esac
 
-# Opening from here on. The context's `focused_pane_cwd` is the pane's launch cwd. An
-# agent that changes directory only inside its own process (`claude -w <worktree>` starts
-# in the main checkout and chdirs into the worktree after launch) leaves the launch cwd
-# naming the wrong repo, and the review would open on the wrong branch. Prefer the focused
-# pane's live `foreground_cwd` when it lies in a git repo (specs/herdr-host.md, Repo
-# discovery), read from the pane-list snapshot already in hand — the focused pane sits in
-# the focused workspace, so the list carries it and the keypress path pays no extra herdr
-# round-trip (docs/herdr-api-notes.md). A live cwd outside any repo, or a pane the list is
-# missing, keeps the context cwd — the live read never refuses an open the context alone
-# could place. The mode guard keeps the event payload's cwd above in charge on auto-open.
+# Opening from here on. Prefer the focused pane's live `foreground_cwd`, read from the
+# pane-list snapshot already in hand, over the context's launch cwd (specs/herdr-host.md,
+# Repo discovery; the launch-vs-live split is docs/herdr-api-notes.md). The mode guard
+# keeps auto-open on the event payload's cwd set above.
 is_git_repo() { [ -n "$1" ] && git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1; }
 live=""
 if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then

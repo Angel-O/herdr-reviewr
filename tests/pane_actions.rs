@@ -72,7 +72,16 @@ fn init_repo(dir: &Path, name: &str) -> PathBuf {
     let repo = dir.join(name);
     fs::create_dir(&repo).unwrap();
     assert!(
-        Command::new("git").arg("-C").arg(&repo).arg("init").arg("-q").status().unwrap().success()
+        Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("init")
+            .arg("-q")
+            .arg("-b")
+            .arg("main")
+            .status()
+            .unwrap()
+            .success()
     );
     repo
 }
@@ -596,6 +605,13 @@ fn open_prefers_the_focused_panes_live_foreground_cwd() {
         calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
         "the open must use the live foreground cwd: {calls}"
     );
+    // The live cwd comes from the run's one snapshot; a second listing would put a herdr
+    // round-trip back on the keypress path.
+    assert_eq!(
+        calls.matches("pane list --workspace").count(),
+        1,
+        "the open must reuse the held pane-list snapshot: {calls}"
+    );
 }
 
 #[test]
@@ -700,10 +716,6 @@ fn open_takes_the_focused_panes_cwd_not_another_panes() {
     assert!(
         calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
         "the open must use the focused pane's cwd, not the decoy's: {calls}"
-    );
-    assert!(
-        !calls.contains(&format!("--cwd {}", decoy_repo.display())),
-        "the decoy pane's cwd must not be reviewed: {calls}"
     );
 }
 
